@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser Listener</title>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Browser Listener</h1>
+      <p id="status" class="status">Loading…</p>
+    </header>
+    <section class="counts">
+      <span>Console: <strong id="console-count">0</strong></span>
+      <span>Network: <strong id="network-count">0</strong></span>
+    </section>
+    <nav class="actions">
+      <button type="button" id="btn-start">Start capture</button>
+      <button type="button" id="btn-stop">Stop capture</button>
+      <button type="button" id="btn-export">Export logs</button>
+      <button type="button" id="btn-clear" class="secondary">Clear logs</button>
+    </nav>
+    <p class="hint">Reload open tabs after install so content scripts attach.</p>
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,62 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+  padding: 12px;
+  width: 280px;
+}
+
+h1 {
+  font-size: 1rem;
+  margin: 0 0 4px;
+}
+
+.status {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.status.active {
+  color: #0a7;
+}
+
+.counts {
+  display: flex;
+  gap: 12px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #8884;
+  cursor: pointer;
+  font: inherit;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: transparent;
+}
+
+.hint {
+  margin: 12px 0 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
