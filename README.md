@@ -1,103 +1,144 @@
 # Browser Listener
 
-Chrome Extension (Manifest V3) that captures page debug data: console logs and network **metadata**, with a path to add page archives later.
+Privacy-first Chrome Extension (Manifest V3) that records a **user-started** browser session and exports a **local ZIP** with structured traces, diagnostics, and a standalone offline investigation report.
+
+- No capture before explicit consent
+- No remote upload or telemetry
+- Redaction before persistence and export
+- Optional screen/audio/static-body capture **off by default** (stubs)
 
 ## Stack
 
-- TypeScript
-- Vite (multi-entry build: background, content, popup)
-- `chrome.storage.local` for persistence
-- JSON export via `chrome.downloads`
+- TypeScript + Vite (multi-entry: background, content, popup)
+- `chrome.storage.local` session persistence
+- `chrome.debugger` (CDP) + `chrome.webRequest` (metadata fallback)
+- `fflate` ZIP builder
+- Vitest unit/regression tests
 
-No backend, auth, or analytics.
+## Quick start
 
-## Project layout
+```bash
+npm install
+npm run build
+npm run typecheck
+npm test
+```
+
+Load unpacked: **chrome://extensions** → Developer mode → **Load unpacked** → `dist/`
+
+Reload the target tab after install. Click the extension icon, check consent, **Start capture**, then **Stop and export ZIP**.
+
+## Core flow
+
+1. **Consent** — checkbox required; no recording until confirmed.
+2. **Start capture** — session on active tab; debugger attach (when allowed); content scripts in **all frames**.
+3. **Stop and export** — detach debugger, stop session, download ZIP locally.
+
+## ZIP contents
+
+| File | Description |
+|------|-------------|
+| `report.html` | Offline investigation report (network + console explorers, cURL copy, repro recipe) |
+| `trace-summary.json` | Compact session summary and counts |
+| `network.har` | HAR 1.2 (metadata; bodies empty unless advanced opt-in added later) |
+| `timeline.json` | Raw event timeline |
+| `console.json` | Console, warnings, exceptions |
+| `diagnostics.json` | Frames, route, performance, DOM snapshot refs |
+| `export-manifest.json` | Artifact list, privacy flags, capture health |
+| `repro-recipe.txt` | Copyable steps from user actions |
+
+Optional paths (`artifacts/screen.webm`, audio, static bodies) appear in manifest only when enabled.
+
+## Module layout
 
 ```
-manifest.json
 src/
-  background/     Service worker, network listeners, message hub
-  content/        Console wrapping, forwards logs to background
-  popup/          Start / stop / export / clear UI
-  shared/         Types, storage, messages, export helpers
-  page-capture/   Stub for future MHTML / archive export
+  capture/        Session manager, debugger CDP, webRequest fallback
+  content/        Console, user actions, navigation, diagnostics (per-frame)
+  redaction/      Configurable rules + default-deny sensitive keys
+  persistence/    Storage + MV3 service-worker recovery
+  export/         HAR, cURL, ZIP orchestration
+  report/         Standalone HTML generator
+  enrichers/      Pluggable post-processors (empty by default)
+  background/     Service worker entry
+  popup/          Consent + capture UI
+  shared/         Types and messages
+tests/            Vitest regression + E2E category registry
 ```
+
+## Capture details
+
+### Full-tab
+
+- Content scripts: `all_frames: true` — top frame + embedded frames.
+- Cross-origin iframe internals follow Chrome isolation; CDP/debugger improves network/console across targets when attached.
+
+### Network
+
+- Primary: CDP `Network.*` via debugger.
+- Fallback: `chrome.webRequest` metadata on the captured tab.
+- **No response-body capture by default** (privacy). Advanced static-body opt-in reserved for future CDP `getResponseBody` behind a flag.
+
+### Console / runtime
+
+- Content: wrapped `console.*`, `error`, `unhandledrejection`.
+- Debugger: `Runtime.consoleAPICalled`, `Runtime.exceptionThrown`.
+
+### User actions
+
+- Click, submit, input, change, `history` API, visibility.
+
+### Page diagnostics
+
+- Frame inventory, route state, DOM snapshots (truncated + redacted), performance resource counts.
+
+## Privacy / redaction
+
+Applied on write and again on export. Default-deny keys include: `authorization`, `cookie`, `set-cookie`, `token`, `access_token`, `refresh_token`, `id_token`, `api_key`, `password`, `secret`, `session`, `jwt`, and related patterns.
+
+Configure via `setRedactionConfig()` in `src/redaction/engine.ts` (runtime API for future options page).
+
+## Enrichers
+
+Register optional enrichers in `src/enrichers/index.ts`. Enable per session via `CaptureOptions.enricherIds`. Keep Oracle BUI, branding, and product-specific logic **out of core**.
+
+## Reliability
+
+- **Debugger detach** — health gap logged; automatic re-attach retry while session active.
+- **Service worker restart** — `loadRecoverableSession()` + debugger reattach; gap recorded in `session.health.partialGaps`.
+- **Partial gaps** — surfaced in export manifest and HTML report health section.
+
+## Permissions
+
+| Permission | Why |
+|------------|-----|
+| `storage` | Local session persistence |
+| `downloads` | Local ZIP export only |
+| `tabs` | Active tab targeting |
+| `debugger` | CDP console/network/runtime (shows debugging banner) |
+| `webRequest` | Metadata fallback |
+| `<all_urls>` host | Capture on user pages (narrow before store publish) |
+| `tabCapture` (optional) | Future screen/audio opt-in |
+
+## API limits
+
+- Response bodies not in HAR unless future opt-in + CDP body fetch.
+- Debugger banner visible while attached.
+- MV3 service worker may sleep; recovery paths documented above.
+- Screen/audio/static-body UI toggles disabled until implemented.
+
+## Testing
+
+```bash
+npm test
+```
+
+Covers redaction regression, ZIP privacy leak checks, HAR/cURL, export manifest, enrichers, session recovery mocks, E2E category registry, and entrypoint/manifest checks.
 
 ## Development
 
 ```bash
-npm install
-npm run dev      # watch build → dist/
-npm run build    # production build + copy manifest
-npm run typecheck
+npm run dev   # watch build → dist/
 ```
 
-Load unpacked: **chrome://extensions** → Developer mode → **Load unpacked** → select the `dist/` folder.
-
-After install or rebuild, **reload tabs** you want to capture so the content script runs.
-
-## Popup actions
-
-| Action        | Behavior |
-|---------------|----------|
-| Start capture | Creates a session; content scripts wrap `console.*`; background records network metadata |
-| Stop capture  | Ends session; restores original console |
-| Export logs   | Downloads JSON (`ExportPayload`) via the downloads API |
-| Clear logs    | Empties console/network arrays; keeps session metadata |
-
-## Console capture
-
-The content script (at `document_start`) wraps `console.log`, `info`, `warn`, `error`, and `debug`. Each call:
-
-1. Invokes the original method (behavior preserved)
-2. Serializes arguments to strings
-3. Sends a normalized `ConsoleEntry` to the background when capture is active
-
-## Network capture
-
-Implemented in `src/background/network-capture.ts` using **`chrome.webRequest`** listeners:
-
-- `onBeforeRequest` — URL, method, resource type, tab
-- `onBeforeSendHeaders` — request headers (extra permission)
-- `onHeadersReceived` — status, response headers
-- `onCompleted` / `onErrorOccurred` — final status, cache, errors
-
-Entries are merged by `requestId` and stored as `NetworkEntry`.
-
-### API limits (important)
-
-| Available | Not available (without other APIs) |
-|-----------|-----------------------------------|
-| URL, method, status, header names/values, timing, tab, IP, cache flag | **Response body**, request body bytes, WebSocket frame payloads |
-| Observed traffic in tabs with host access | Full HAR identical to DevTools Network panel |
-
-**We do not fake body capture.** Export only includes metadata.
-
-### Future: richer network / page data
-
-Structure allows adding later without rewriting storage:
-
-- **`chrome.debugger`** — attach per tab, CDP `Network.*` (heavier UX, “debugging” banner)
-- **DevTools extension** — `chrome.devtools.network` in a devtools panel only
-- **Page archive** — see `src/page-capture/index.ts`
-
-## Page capture (stub)
-
-`chrome.pageCapture.saveAsMHTML` can save the current tab as MHTML when permitted (`activeTab` / host access). Limits:
-
-- DOM snapshot at save time; not a full network recording
-- Cross-origin iframe content may be incomplete
-- Large pages → large files; should be explicit user action
-
-`saveTabAsMhtml()` is stubbed; export JSON includes a `pageCapture` note field.
-
-## Export format
-
-See `ExportPayload` in `src/shared/types.ts`: session, `console[]`, `network[]`, and `pageCapture` stub metadata.
-
-## Permissions
-
-- `storage`, `downloads`, `tabs`, `webRequest`
-- `host_permissions`: `<all_urls>` (network + content on all pages)
-
-Review and narrow host permissions before publishing to a store.
+After rebuild, reload the extension and target tabs.

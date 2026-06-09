@@ -1,101 +1,138 @@
 import { MessageType } from "../shared/messages.js";
-import type { ConsoleEntry } from "../shared/types.js";
 import {
-  appendConsoleEntry,
-  clearLogs,
-  readStorage,
-  resetAll,
-  writeSession,
-} from "../shared/storage.js";
-import { buildExportPayload, downloadJsonExport } from "../shared/export.js";
-import { registerNetworkCapture } from "./network-capture.js";
+  createSession,
+  getActiveSession,
+  stopSession,
+} from "../capture/session-manager.js";
+import {
+  attachDebugger,
+  detachDebugger,
+  ensureDebuggerForSession,
+  getAttachedTabId,
+  registerDebuggerCapture,
+} from "../capture/debugger-capture.js";
+import { registerWebRequestCapture } from "../capture/web-request-capture.js";
+import {
+  appendConsole,
+  appendDiagnostics,
+  appendDomSnapshot,
+  appendUserAction,
+  readSessionData,
+} from "../persistence/store.js";
+import { loadRecoverableSession } from "../persistence/session-recovery.js";
+import { downloadZipExport } from "../export/orchestrator.js";
+import { broadcastCaptureState } from "./broadcast.js";
+import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
+import type { CaptureOptions, ConsoleEntry, UserAction } from "../shared/types.js";
+import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
-function newSession() {
-  return {
-    id: crypto.randomUUID(),
-    active: true,
-    startedAt: Date.now(),
-  };
+async function startWithConsent(
+  tabId: number,
+  options: Partial<CaptureOptions> = {},
+): Promise<void> {
+  const tab = await chrome.tabs.get(tabId);
+  const session = await createSession(tabId, tab.url, options);
+  let debuggerAttached = false;
+  try {
+    await attachDebugger(tabId);
+    debuggerAttached = getAttachedTabId() === tabId;
+  } catch {
+    /* webRequest fallback remains active */
+  }
+  await broadcastCaptureState(true, session.id, debuggerAttached);
 }
 
-async function broadcastCaptureState(active: boolean, sessionId: string | null): Promise<void> {
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (tab.id == null) continue;
-    chrome.tabs.sendMessage(tab.id, {
-      type: MessageType.CAPTURE_STATE_CHANGED,
-      active,
-      sessionId,
-    }).catch(() => {});
+async function stopAndExport(): Promise<void> {
+  await detachDebugger();
+  await stopSession();
+  await broadcastCaptureState(false, null, false);
+  await downloadZipExport();
+}
+
+registerDebuggerCapture();
+registerWebRequestCapture();
+
+chrome.runtime.onInstalled.addListener(() => {
+  void recoverSession();
+});
+
+async function recoverSession(): Promise<void> {
+  const { shouldRecover, session } = await loadRecoverableSession();
+  if (!shouldRecover || !session) return;
+  try {
+    await ensureDebuggerForSession();
+    const debuggerAttached = getAttachedTabId() === session.tabId;
+    await broadcastCaptureState(true, session.id, debuggerAttached);
+  } catch {
+    /* partial recovery noted in health */
   }
 }
 
-async function startCapture(): Promise<void> {
-  const { session: existing } = await readStorage();
-  if (existing?.active) return;
-
-  const session = newSession();
-  await writeSession(session);
-  await broadcastCaptureState(true, session.id);
+async function bootstrap(): Promise<void> {
+  await onServiceWorkerActivate();
+  await recoverSession();
 }
 
-async function stopCapture(): Promise<void> {
-  const { session } = await readStorage();
-  if (!session?.active) return;
+void bootstrap();
 
-  await writeSession({ ...session, active: false, stoppedAt: Date.now() });
-  await broadcastCaptureState(false, null);
-}
-
-registerNetworkCapture();
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const run = async (): Promise<unknown> => {
     switch (message?.type) {
       case MessageType.GET_STATE: {
-        const data = await readStorage();
+        const data = await readSessionData();
         return {
           session: data.session,
-          consoleCount: data.consoleEntries.length,
-          networkCount: data.networkEntries.length,
+          counts: {
+            console: data.console.length,
+            network: data.network.length,
+            userActions: data.userActions.length,
+            timeline: data.timeline.length,
+          },
+          canExport: !data.session?.active && (data.console.length > 0 || data.network.length > 0),
         };
       }
-      case MessageType.START_CAPTURE:
-        await startCapture();
-        return { ok: true };
-      case MessageType.STOP_CAPTURE:
-        await stopCapture();
-        return { ok: true };
-      case MessageType.CLEAR_LOGS:
-        await clearLogs();
-        return { ok: true };
-      case MessageType.EXPORT_LOGS: {
-        const data = await readStorage();
-        const payload = buildExportPayload(data);
-        await downloadJsonExport(payload);
+      case MessageType.CONSENT_AND_START: {
+        const tabId = message.tabId as number | undefined;
+        const opts = (message.options as Partial<CaptureOptions>) ?? {};
+        const id =
+          tabId ??
+          (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+        if (id == null) return { ok: false, error: "No active tab" };
+        if (await getActiveSession()) return { ok: false, error: "Already capturing" };
+        await startWithConsent(id, { ...DEFAULT_CAPTURE_OPTIONS, ...opts });
         return { ok: true };
       }
-      case MessageType.CONSOLE_LOG: {
-        const entry = message.entry as ConsoleEntry;
-        const { session } = await readStorage();
-        if (!session?.active || entry.sessionId !== session.id) {
-          return { ok: false, reason: "inactive" };
+      case MessageType.STOP_AND_EXPORT:
+        await stopAndExport();
+        return { ok: true };
+      case MessageType.RECORD_EVENT: {
+        const session = await getActiveSession();
+        if (!session) return { ok: false, reason: "inactive" };
+        const kind = message.eventKind as string;
+        if (kind === "console") {
+          const entry = message.entry as ConsoleEntry;
+          if (entry.sessionId !== session.id) return { ok: false };
+          // Ignore content-script console when debugger is the active source
+          if (entry.source === "content" && session.health.debuggerAttached) {
+            return { ok: true, skipped: "debugger_console_active" };
+          }
+          const tabId = sender.tab?.id;
+          await appendConsole(tabId != null ? { ...entry, tabId } : entry);
+        } else if (kind === "user") {
+          await appendUserAction(message.action as UserAction);
+        } else if (kind === "diagnostics") {
+          await appendDiagnostics(message.bundle);
+        } else if (kind === "dom") {
+          await appendDomSnapshot(message.snapshot);
         }
-        const tabId = _sender.tab?.id;
-        await appendConsoleEntry(tabId != null ? { ...entry, tabId } : entry);
         return { ok: true };
       }
       default:
         return { ok: false };
     }
   };
-
   run()
     .then(sendResponse)
     .catch((err: Error) => sendResponse({ ok: false, error: err.message }));
   return true;
-});
-
-chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === "install") void resetAll();
 });

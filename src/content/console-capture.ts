@@ -22,6 +22,8 @@ function createEntry(sessionId: string, level: ConsoleLevel, args: unknown[]): C
     level,
     args: args.map(serializeArg),
     url: location.href,
+    frameUrl: location.href,
+    source: "content",
   };
 }
 
@@ -34,12 +36,23 @@ export function installConsoleCapture(
   for (const level of LEVELS) {
     const original = console[level].bind(console);
     originals.set(level, original);
-
     console[level] = (...args: unknown[]) => {
       original(...args);
       onEntry(createEntry(sessionId, level, args));
     };
   }
+
+  window.addEventListener("error", (ev) => {
+    onEntry({
+      ...createEntry(sessionId, "error", [ev.message]),
+      stack: ev.error?.stack,
+    });
+  });
+
+  window.addEventListener("unhandledrejection", (ev) => {
+    const reason = ev.reason instanceof Error ? ev.reason.message : String(ev.reason);
+    onEntry(createEntry(sessionId, "error", [`Unhandled rejection: ${reason}`]));
+  });
 
   return () => {
     for (const level of LEVELS) {

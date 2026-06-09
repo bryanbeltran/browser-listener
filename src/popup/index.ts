@@ -1,58 +1,75 @@
 import { MessageType } from "../shared/messages.js";
-import type { GetStateResponse } from "../shared/messages.js";
+import type { PopupStateResponse } from "../shared/messages.js";
 
-const statusEl = document.getElementById("status")!;
-const consoleCountEl = document.getElementById("console-count")!;
-const networkCountEl = document.getElementById("network-count")!;
+const consentPanel = document.getElementById("consent-panel")!;
+const activePanel = document.getElementById("active-panel")!;
+const consentCheck = document.getElementById("consent-check") as HTMLInputElement;
 const btnStart = document.getElementById("btn-start") as HTMLButtonElement;
-const btnStop = document.getElementById("btn-stop") as HTMLButtonElement;
-const btnExport = document.getElementById("btn-export") as HTMLButtonElement;
-const btnClear = document.getElementById("btn-clear") as HTMLButtonElement;
+const btnStopExport = document.getElementById("btn-stop-export") as HTMLButtonElement;
+const statusEl = document.getElementById("status")!;
+const healthHint = document.getElementById("health-hint")!;
+const cConsole = document.getElementById("c-console")!;
+const cNetwork = document.getElementById("c-network")!;
+const cActions = document.getElementById("c-actions")!;
 
-async function send<T>(type: string): Promise<T> {
-  return chrome.runtime.sendMessage({ type }) as Promise<T>;
+async function send<T>(type: string, extra: object = {}): Promise<T> {
+  return chrome.runtime.sendMessage({ type, ...extra }) as Promise<T>;
 }
 
-function setUi(state: GetStateResponse): void {
+function showActive(active: boolean): void {
+  consentPanel.classList.toggle("hidden", active);
+  activePanel.classList.toggle("hidden", !active);
+}
+
+function render(state: PopupStateResponse): void {
   const active = state.session?.active ?? false;
-  statusEl.textContent = active
-    ? `Capturing (session ${state.session!.id.slice(0, 8)}…)`
-    : "Idle";
-  statusEl.classList.toggle("active", active);
-  consoleCountEl.textContent = String(state.consoleCount);
-  networkCountEl.textContent = String(state.networkCount);
-  btnStart.disabled = active;
-  btnStop.disabled = !active;
+  showActive(active);
+  if (active && state.session) {
+    statusEl.textContent = `Session ${state.session.id.slice(0, 8)}…`;
+    const gaps = state.session.health.partialGaps.length;
+    const dbg = state.session.health.debuggerAttached;
+    healthHint.textContent = gaps
+      ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (webRequest fallback)"}`
+      : dbg
+        ? "Debugger attached"
+        : "Using webRequest metadata fallback";
+  }
+  cConsole.textContent = String(state.counts.console);
+  cNetwork.textContent = String(state.counts.network);
+  cActions.textContent = String(state.counts.userActions);
+  btnStart.disabled = !consentCheck.checked || active;
 }
 
-async function refresh(): Promise<void> {
-  const state = await send<GetStateResponse>(MessageType.GET_STATE);
-  setUi(state);
-}
+consentCheck.addEventListener("change", () => {
+  btnStart.disabled = !consentCheck.checked;
+});
 
 btnStart.addEventListener("click", async () => {
-  await send(MessageType.START_CAPTURE);
-  await refresh();
-});
-
-btnStop.addEventListener("click", async () => {
-  await send(MessageType.STOP_CAPTURE);
-  await refresh();
-});
-
-btnExport.addEventListener("click", async () => {
-  btnExport.disabled = true;
+  if (!consentCheck.checked) return;
+  btnStart.disabled = true;
   try {
-    await send(MessageType.EXPORT_LOGS);
-  } finally {
-    btnExport.disabled = false;
+    await send(MessageType.CONSENT_AND_START, { consented: true });
+    await refresh();
+  } catch {
+    btnStart.disabled = false;
   }
 });
 
-btnClear.addEventListener("click", async () => {
-  if (!confirm("Clear all captured console and network entries?")) return;
-  await send(MessageType.CLEAR_LOGS);
-  await refresh();
+btnStopExport.addEventListener("click", async () => {
+  btnStopExport.disabled = true;
+  try {
+    await send(MessageType.STOP_AND_EXPORT);
+    consentCheck.checked = false;
+    await refresh();
+  } finally {
+    btnStopExport.disabled = false;
+  }
 });
 
+async function refresh(): Promise<void> {
+  const state = await send<PopupStateResponse>(MessageType.GET_STATE);
+  render(state);
+}
+
 void refresh();
+setInterval(() => void refresh(), 2000);

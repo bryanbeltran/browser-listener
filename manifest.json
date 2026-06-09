@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Browser Listener",
-  "version": "0.1.0",
-  "description": "Capture page console logs and network metadata for debugging.",
-  "permissions": ["storage", "downloads", "tabs", "webRequest"],
+  "version": "0.2.0",
+  "description": "Privacy-first local browser session recorder with ZIP export and offline investigation report.",
+  "permissions": ["storage", "downloads", "tabs", "webRequest", "debugger", "webNavigation"],
+  "optional_permissions": ["tabCapture"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
@@ -18,7 +19,8 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_start",
-      "type": "module"
+      "type": "module",
+      "all_frames": true
     }
   ]
 }
