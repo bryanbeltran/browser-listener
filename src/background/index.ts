@@ -12,17 +12,27 @@ import {
   registerDebuggerCapture,
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
+import { recordTimeline } from "../capture/timeline.js";
 import {
   appendConsole,
   appendDiagnostics,
   appendDomSnapshot,
   appendUserAction,
+  clearSessionData,
   readSessionData,
 } from "../persistence/store.js";
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
 import { downloadZipExport } from "../export/orchestrator.js";
 import { broadcastCaptureState } from "./broadcast.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
+import { registerTabLifecycle } from "./tab-lifecycle.js";
+import {
+  enrichConsoleEntry,
+  enrichDiagnosticsBundle,
+  enrichDomSnapshot,
+  enrichUserAction,
+  userActionTimelineSummary,
+} from "./sender-context.js";
 import type { CaptureOptions, ConsoleEntry, UserAction } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -51,6 +61,7 @@ async function stopAndExport(): Promise<void> {
 
 registerDebuggerCapture();
 registerWebRequestCapture();
+registerTabLifecycle();
 
 chrome.runtime.onInstalled.addListener(() => {
   void recoverSession();
@@ -80,6 +91,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case MessageType.GET_STATE: {
         const data = await readSessionData();
+        const hasData =
+          data.console.length > 0 ||
+          data.network.length > 0 ||
+          data.userActions.length > 0 ||
+          data.timeline.length > 0;
         return {
           session: data.session,
           counts: {
@@ -88,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             userActions: data.userActions.length,
             timeline: data.timeline.length,
           },
-          canExport: !data.session?.active && (data.console.length > 0 || data.network.length > 0),
+          canExport: !data.session?.active && hasData,
         };
       }
       case MessageType.CONSENT_AND_START: {
@@ -105,25 +121,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case MessageType.STOP_AND_EXPORT:
         await stopAndExport();
         return { ok: true };
+      case MessageType.EXPORT_CAPTURE:
+        if (await getActiveSession()) {
+          return { ok: false, error: "Stop capture before export" };
+        }
+        await downloadZipExport();
+        return { ok: true };
+      case MessageType.DISCARD_CAPTURE:
+        if (await getActiveSession()) {
+          return { ok: false, error: "Stop capture first" };
+        }
+        await clearSessionData();
+        return { ok: true };
       case MessageType.RECORD_EVENT: {
         const session = await getActiveSession();
         if (!session) return { ok: false, reason: "inactive" };
         const kind = message.eventKind as string;
         if (kind === "console") {
-          const entry = message.entry as ConsoleEntry;
+          const entry = enrichConsoleEntry(message.entry as ConsoleEntry, sender);
           if (entry.sessionId !== session.id) return { ok: false };
-          // Ignore content-script console when debugger is the active source
           if (entry.source === "content" && session.health.debuggerAttached) {
             return { ok: true, skipped: "debugger_console_active" };
           }
-          const tabId = sender.tab?.id;
-          await appendConsole(tabId != null ? { ...entry, tabId } : entry);
+          await appendConsole(entry);
         } else if (kind === "user") {
-          await appendUserAction(message.action as UserAction);
+          const action = enrichUserAction(message.action as UserAction, sender);
+          await appendUserAction(action);
+          await recordTimeline(session.id, "user", action.type, userActionTimelineSummary(action), {
+            frameId: action.frameId,
+            tabId: action.tabId,
+            payloadRef: action.id,
+          });
         } else if (kind === "diagnostics") {
-          await appendDiagnostics(message.bundle);
+          await appendDiagnostics(enrichDiagnosticsBundle(message.bundle, sender));
         } else if (kind === "dom") {
-          await appendDomSnapshot(message.snapshot);
+          await appendDomSnapshot(enrichDomSnapshot(message.snapshot, sender));
         }
         return { ok: true };
       }

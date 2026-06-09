@@ -8,7 +8,7 @@ export function collectFrameInfo(): FrameInfo {
     crossOrigin = window.parent !== window;
   }
   return {
-    frameId: crypto.randomUUID(),
+    frameId: "pending",
     url: location.href,
     name: window.name || undefined,
     crossOrigin,

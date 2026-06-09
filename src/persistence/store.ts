@@ -1,4 +1,9 @@
 import { redactDeep } from "../redaction/engine.js";
+import {
+  emptyTruncation,
+  pushWithCap,
+  STORAGE_LIMITS,
+} from "./limits.js";
 import type {
   CaptureSession,
   ConsoleEntry,
@@ -6,6 +11,7 @@ import type {
   DomSnapshot,
   NetworkEntry,
   SessionData,
+  StorageTruncation,
   TimelineEvent,
   UserAction,
 } from "../shared/types.js";
@@ -51,6 +57,21 @@ function bumpHealth(
   return { ...session, health: { ...session.health, ...patch } };
 }
 
+function ensureTruncation(session: CaptureSession): StorageTruncation {
+  return session.health.truncation ?? emptyTruncation();
+}
+
+function applyCap<T>(
+  arr: T[],
+  item: T,
+  bucket: keyof typeof STORAGE_LIMITS,
+  session: CaptureSession,
+): CaptureSession {
+  const truncation = { ...ensureTruncation(session) };
+  pushWithCap(arr, item, STORAGE_LIMITS[bucket], truncation, bucket);
+  return bumpHealth(session, { truncation });
+}
+
 export async function withSession(
   fn: (data: SessionData) => SessionData | Promise<SessionData>,
 ): Promise<SessionData> {
@@ -67,7 +88,7 @@ export async function setSession(session: CaptureSession | null): Promise<void> 
 export async function appendTimeline(event: TimelineEvent): Promise<void> {
   await withSession((data) => {
     if (!data.session?.active) return data;
-    data.timeline.push(redactDeep(event));
+    data.session = applyCap(data.timeline, redactDeep(event), "timeline", data.session);
     data.session = bumpHealth(data.session, {
       eventCounts: {
         ...data.session.health.eventCounts,
@@ -81,7 +102,7 @@ export async function appendTimeline(event: TimelineEvent): Promise<void> {
 export async function appendConsole(entry: ConsoleEntry): Promise<void> {
   await withSession((data) => {
     if (!data.session?.active || entry.sessionId !== data.session.id) return data;
-    data.console.push(redactDeep(entry));
+    data.session = applyCap(data.console, redactDeep(entry), "console", data.session);
     return data;
   });
 }
@@ -91,8 +112,11 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
     if (!data.session?.active) return data;
     const idx = data.network.findIndex((n) => n.requestId === entry.requestId);
     const redacted = redactDeep(entry);
-    if (idx >= 0) data.network[idx] = { ...data.network[idx], ...redacted };
-    else data.network.push(redacted);
+    if (idx >= 0) {
+      data.network[idx] = { ...data.network[idx], ...redacted };
+    } else {
+      data.session = applyCap(data.network, redacted, "network", data.session);
+    }
     return data;
   });
 }
@@ -100,7 +124,7 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
 export async function appendUserAction(action: UserAction): Promise<void> {
   await withSession((data) => {
     if (!data.session?.active) return data;
-    data.userActions.push(redactDeep(action));
+    data.session = applyCap(data.userActions, redactDeep(action), "userActions", data.session);
     return data;
   });
 }

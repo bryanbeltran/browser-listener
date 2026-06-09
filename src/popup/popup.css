@@ -67,6 +67,11 @@ button.primary {
   font-weight: 600;
 }
 
+button.secondary {
+  margin-top: 8px;
+  background: transparent;
+}
+
 .status.active {
   color: #0a7;
 }

@@ -41,6 +41,18 @@
       <button type="button" id="btn-stop-export" class="primary">Stop and export ZIP</button>
     </section>
 
+    <section id="export-panel" class="panel hidden">
+      <p id="export-status" class="status">Capture ended</p>
+      <div class="counts">
+        <span>Console <strong id="e-console">0</strong></span>
+        <span>Network <strong id="e-network">0</strong></span>
+        <span>Actions <strong id="e-actions">0</strong></span>
+      </div>
+      <p id="export-hint" class="hint"></p>
+      <button type="button" id="btn-export" class="primary">Export ZIP</button>
+      <button type="button" id="btn-new-session" class="secondary">Start new capture</button>
+    </section>
+
     <p class="hint footer">Reload the target tab after install. Export is local ZIP only.</p>
     <script type="module" src="./index.ts"></script>
   </body>

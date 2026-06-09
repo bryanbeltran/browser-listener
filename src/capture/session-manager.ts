@@ -1,3 +1,4 @@
+import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
   readSessionData,
@@ -16,6 +17,7 @@ function newHealth(): CaptureSession["health"] {
     partialGaps: [],
     persistenceErrors: [],
     eventCounts: {},
+    truncation: emptyTruncation(),
   };
 }
 
@@ -48,13 +50,14 @@ export async function createSession(
   return session;
 }
 
-export async function stopSession(): Promise<CaptureSession | null> {
+export async function stopSession(opts?: { tabClosed?: boolean }): Promise<CaptureSession | null> {
   const data = await readSessionData();
   if (!data.session?.active) return data.session;
   const stopped: CaptureSession = {
     ...data.session,
     active: false,
     stoppedAt: Date.now(),
+    tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
   };
   await setSession(stopped);
   await recordTimeline(stopped.id, "system", "session_stop", "Capture stopped");

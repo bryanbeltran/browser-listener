@@ -23,6 +23,7 @@ export function buildExportManifest(
       partialGaps: [],
       persistenceErrors: [],
       eventCounts: {},
+      truncation: { console: 0, network: 0, timeline: 0, userActions: 0 },
     },
   };
 }

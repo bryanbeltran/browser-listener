@@ -14,6 +14,13 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   enricherIds: [],
 };
 
+export interface StorageTruncation {
+  console: number;
+  network: number;
+  timeline: number;
+  userActions: number;
+}
+
 export interface SessionHealth {
   debuggerAttached: boolean;
   debuggerDetachCount: number;
@@ -23,6 +30,8 @@ export interface SessionHealth {
   partialGaps: HealthGap[];
   persistenceErrors: string[];
   eventCounts: Record<string, number>;
+  /** Count of entries dropped due to storage caps */
+  truncation: StorageTruncation;
 }
 
 export interface HealthGap {
@@ -41,6 +50,7 @@ export interface CaptureSession {
   tabUrl?: string;
   options: CaptureOptions;
   health: SessionHealth;
+  tabClosedDuringCapture?: boolean;
 }
 
 export interface TimelineEvent {
@@ -102,9 +112,12 @@ export interface UserAction {
   valueSummary?: string;
   url: string;
   frameUrl?: string;
+  frameId?: string;
+  tabId?: number;
 }
 
 export interface FrameInfo {
+  /** Chrome frameId as string (from CDP or message sender) */
   frameId: string;
   parentId?: string;
   url: string;
@@ -127,6 +140,7 @@ export interface DomSnapshot {
   timestamp: number;
   url: string;
   frameUrl?: string;
+  frameId?: string;
   htmlSummary: string;
   nodeCount: number;
 }
