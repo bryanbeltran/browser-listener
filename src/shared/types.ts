@@ -49,6 +49,14 @@ export interface FacebookPost {
   /** Reactors captured for this post id in this session. */
   reactionCount?: number;
   linkedReactions?: { userId: string; userName: string }[];
+  /** Comments captured for this post id in this session. */
+  commentCount?: number;
+  linkedComments?: {
+    id: string;
+    authorName?: string;
+    text?: string;
+    createdAt?: number;
+  }[];
 }
 
 export interface FacebookComment {

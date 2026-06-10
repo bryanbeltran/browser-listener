@@ -1,11 +1,15 @@
 import {
+  commentLegacyKey,
+  decodeCommentPostId,
   decodeFeedbackPostId,
   extractCommentsFromPartialJson,
   extractStoryTextsFromPartialJson,
   groupPermalinkUrl,
+  isDialogReactionSource,
   parseGraphqlLines,
   permalinkPostId,
   postIdFromFacebookUrl,
+  preferCommentId,
 } from "./facebook-parse.js";
 import type {
   FacebookComment,
@@ -70,6 +74,46 @@ function messageText(message: unknown): string | undefined {
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
+function readCaption(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const caption = (value as { accessibility_caption?: unknown }).accessibility_caption;
+  return typeof caption === "string" && caption.trim() ? caption.trim() : undefined;
+}
+
+function attachmentCaption(attachments: unknown): string | undefined {
+  if (!Array.isArray(attachments)) return undefined;
+  for (const item of attachments) {
+    if (!item || typeof item !== "object") continue;
+    const renderer = (item as Record<string, unknown>).style_type_renderer;
+    if (!renderer || typeof renderer !== "object") continue;
+    const attachment = (renderer as Record<string, unknown>).attachment;
+    if (!attachment || typeof attachment !== "object") continue;
+    const fromAttachment = readCaption(attachment);
+    if (fromAttachment) return fromAttachment;
+    const media = (attachment as { media?: unknown }).media;
+    const fromMedia = readCaption(media);
+    if (fromMedia) return fromMedia;
+  }
+  return undefined;
+}
+
+function commentText(node: Record<string, unknown>): string | undefined {
+  const body = node.body;
+  if (body && typeof body === "object") {
+    const fromBody = messageText(body);
+    if (fromBody) return fromBody;
+  }
+  const fromMessage = messageText(node.message);
+  if (fromMessage) return fromMessage;
+  return attachmentCaption(node.attachments);
+}
+
+function commentCreatedAt(node: Record<string, unknown>): number | undefined {
+  if (typeof node.created_time === "number") return node.created_time;
+  if (typeof node.creation_time === "number") return node.creation_time;
+  return undefined;
+}
+
 function storyFromNode(node: Record<string, unknown>): Record<string, unknown> | null {
   if (node.__typename === "Story") return node;
   const story = node.story;
@@ -84,6 +128,79 @@ function storyFromNode(node: Record<string, unknown>): Record<string, unknown> |
 
 export interface ExtractFacebookOptions {
   tabUrl?: string;
+}
+
+function consolidateReactions(
+  raw: FacebookReaction[],
+): { reactions: FacebookReaction[]; hints: string[] } {
+  const hints: string[] = [];
+  const byPost = new Map<string, FacebookReaction[]>();
+  const noPost: FacebookReaction[] = [];
+
+  for (const r of raw) {
+    if (!r.postId) {
+      noPost.push(r);
+      continue;
+    }
+    const list = byPost.get(r.postId) ?? [];
+    list.push(r);
+    byPost.set(r.postId, list);
+  }
+
+  const out: FacebookReaction[] = [...noPost];
+  for (const [postId, list] of byPost) {
+    const dialog = list.filter((r) => isDialogReactionSource(r.source));
+    const chosen = dialog.length > 0 ? dialog : list;
+    const seen = new Set<string>();
+    for (const r of chosen) {
+      if (seen.has(r.userId)) continue;
+      seen.add(r.userId);
+      out.push(r);
+    }
+    if (dialog.length === 0 && list.length > 0) {
+      const total = list[0]?.reactionCount;
+      const captured = seen.size;
+      if (total != null && total > captured) {
+        hints.push(
+          `Post ${postId}: only reaction tooltip captured (${captured}/${total}) — open full reactions dialog for complete list`,
+        );
+      }
+    }
+  }
+
+  return { reactions: out, hints };
+}
+
+function linkPostsToComments(
+  posts: FacebookPost[],
+  comments: FacebookComment[],
+): FacebookPost[] {
+  const byPostId = new Map<string, FacebookComment[]>();
+  for (const c of comments) {
+    if (!c.postId) continue;
+    const list = byPostId.get(c.postId) ?? [];
+    list.push(c);
+    byPostId.set(c.postId, list);
+  }
+
+  return posts.map((post) => {
+    const postId = post.postId ?? postIdFromFacebookUrl(post.url);
+    const matched = postId ? byPostId.get(postId) ?? [] : [];
+    if (matched.length === 0) {
+      return postId && !post.postId ? { ...post, postId } : post;
+    }
+    return {
+      ...post,
+      postId,
+      commentCount: matched.length,
+      linkedComments: matched.map((c) => ({
+        id: c.id,
+        authorName: c.authorName,
+        text: c.text,
+        createdAt: c.createdAt,
+      })),
+    };
+  });
 }
 
 function linkPostsToReactions(
@@ -128,6 +245,14 @@ function linkPostsToReactions(
   return linked;
 }
 
+function linkPosts(
+  posts: FacebookPost[],
+  reactions: FacebookReaction[],
+  comments: FacebookComment[],
+): FacebookPost[] {
+  return linkPostsToComments(linkPostsToReactions(posts, reactions), comments);
+}
+
 export function extractFacebookGroupActivity(
   network: NetworkEntry[],
   opts: ExtractFacebookOptions = {},
@@ -136,6 +261,7 @@ export function extractFacebookGroupActivity(
   const people = new Map<string, FacebookPerson>();
   const posts = new Map<string, FacebookPost>();
   const comments = new Map<string, FacebookComment>();
+  const commentKeys = new Map<string, string>();
   const reactions: FacebookReaction[] = [];
   const queryHints = new Map<string, { docId: string; friendlyName?: string; count: number }>();
   const parseWarnings: string[] = [];
@@ -187,6 +313,38 @@ export function extractFacebookGroupActivity(
     }));
   };
 
+  const addComment = (
+    comment: FacebookComment,
+    legacyKey?: string,
+  ) => {
+    const postId =
+      comment.postId ?? decodeCommentPostId(comment.id) ?? sessionPostId ?? undefined;
+    const normalized: FacebookComment = { ...comment, postId };
+    const key = legacyKey ?? commentLegacyKey(normalized.id) ?? normalized.id;
+    const existingId = commentKeys.get(key);
+    const existing = existingId ? comments.get(existingId) : undefined;
+    if (!existing) {
+      commentKeys.set(key, normalized.id);
+      comments.set(normalized.id, normalized);
+      return;
+    }
+    const mergedId = preferCommentId(existing.id, normalized.id) ?? existing.id;
+    if (mergedId !== existing.id) {
+      comments.delete(existing.id);
+      commentKeys.set(key, mergedId);
+    }
+    comments.set(mergedId, {
+      ...existing,
+      ...normalized,
+      id: mergedId,
+      text: normalized.text ?? existing.text,
+      authorName: normalized.authorName ?? existing.authorName,
+      authorId: normalized.authorId ?? existing.authorId,
+      postId: normalized.postId ?? existing.postId,
+      createdAt: normalized.createdAt ?? existing.createdAt,
+    });
+  };
+
   for (const entry of network) {
     if (!isFacebookGraphql(entry)) continue;
 
@@ -229,14 +387,12 @@ export function extractFacebookGroupActivity(
       }
       for (const c of extractCommentsFromPartialJson(entry.responseBody)) {
         const cid = c.id ?? `partial-comment:${c.text.slice(0, 40)}`;
-        if (!comments.has(cid)) {
-          comments.set(cid, {
-            id: cid,
-            text: c.text,
-            source,
-            postId: sessionPostId,
-          });
-        }
+        addComment({
+          id: cid,
+          text: c.text,
+          source,
+          postId: decodeCommentPostId(c.id) ?? sessionPostId,
+        });
       }
     }
 
@@ -295,7 +451,7 @@ export function extractFacebookGroupActivity(
           }
 
           if (typename === "Comment" && typeof node.id === "string") {
-            const text = messageText(node.message);
+            const text = commentText(node);
             const author = node.author;
             let authorName: string | undefined;
             let authorId: string | undefined;
@@ -304,16 +460,24 @@ export function extractFacebookGroupActivity(
               authorName = typeof a.name === "string" ? a.name : undefined;
               authorId = typeof a.id === "string" ? a.id : undefined;
             }
-            if (!comments.has(node.id)) {
-              comments.set(node.id, {
+            const legacyToken =
+              typeof node.legacy_token === "string" ? node.legacy_token : undefined;
+            const legacyFbid =
+              typeof node.legacy_fbid === "string" ? node.legacy_fbid : undefined;
+            addComment(
+              {
                 id: node.id,
                 text,
                 authorId,
                 authorName,
-                createdAt: typeof node.created_time === "number" ? node.created_time : undefined,
+                createdAt: commentCreatedAt(node),
                 source,
-                postId: sessionPostId,
-              });
+                postId: decodeCommentPostId(node.id) ?? sessionPostId,
+              },
+              commentLegacyKey(node.id, legacyToken, legacyFbid),
+            );
+            if (authorId && authorName) {
+              addPerson({ id: authorId, name: authorName, source });
             }
           }
         }
@@ -383,15 +547,16 @@ export function extractFacebookGroupActivity(
     }
   }
 
-  const linkedPosts = linkPostsToReactions([...posts.values()], reactions);
-  const uniqueWarnings = [...new Set(parseWarnings)];
+  const { reactions: mergedReactions, hints: reactionHints } = consolidateReactions(reactions);
+  const linkedPosts = linkPosts([...posts.values()], mergedReactions, [...comments.values()]);
+  const uniqueWarnings = [...new Set([...parseWarnings, ...reactionHints])];
 
   return {
     groups: [...groups.values()],
     people: [...people.values()],
     posts: linkedPosts,
     comments: [...comments.values()],
-    reactions,
+    reactions: mergedReactions,
     graphqlQueryHints: [...queryHints.values()].sort((a, b) => b.count - a.count),
     sessionPermalink: opts.tabUrl?.includes("/permalink/") ? opts.tabUrl : undefined,
     parseWarnings: uniqueWarnings.length ? uniqueWarnings : undefined,

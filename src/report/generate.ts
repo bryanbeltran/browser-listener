@@ -34,6 +34,8 @@ export function generateReportHtml(data: SessionData): string {
   th, td { border: 1px solid #8884; padding: 6px 8px; text-align: left; vertical-align: top; }
   .health-warn { color: #c60; }
   .muted { opacity: 0.7; font-size: 12px; }
+  .post-block { margin: 16px 0; padding: 12px; border: 1px solid #8884; border-radius: 8px; }
+  .post-block h4 { margin: 0 0 8px; font-size: 14px; }
   button { cursor: pointer; padding: 4px 8px; }
 </style>
 </head>
@@ -76,9 +78,27 @@ else {
   if(fb.groups.length) fbHtml += '<h3>Groups ('+fb.groups.length+')</h3>'+table(['Name','ID','URL'], fb.groups.map(g=>[esc(g.name||''), esc(g.id), g.url?'<a href="'+esc(g.url)+'">'+esc(g.url)+'</a>':'']));
   if(fb.graphqlQueryHints?.length) fbHtml += '<h3>GraphQL queries</h3>'+table(['Friendly name','doc_id','Count'], fb.graphqlQueryHints.map(q=>[esc(q.friendlyName||''), esc(q.docId), esc(q.count)]));
   if(fb.people.length) fbHtml += '<h3>People ('+fb.people.length+')</h3>'+table(['Name','ID','Source'], fb.people.map(p=>[esc(p.name), esc(p.id), esc(p.source)]));
-  if(fb.posts.length) fbHtml += '<h3>Posts ('+fb.posts.length+')</h3>'+table(['Post ID','Author','Reactions','Text','URL','Partial'], fb.posts.map(p=>[esc(p.postId||''), esc(p.authorName||''), esc(p.reactionCount??''), esc((p.text||'').slice(0,200)), p.url?'<a href="'+esc(p.url)+'">link</a>':'', p.partialParse?'yes':'']));
-  if(fb.reactions.length) fbHtml += '<h3>Reactions ('+fb.reactions.length+')</h3>'+table(['User','Post ID','Total'], fb.reactions.map(r=>[esc(r.userName), esc(r.postId||''), esc(r.reactionCount??'')]));
-  if(fb.comments.length) fbHtml += '<h3>Comments ('+fb.comments.length+')</h3>'+table(['Author','Text','Post ID'], fb.comments.map(c=>[esc(c.authorName||''), esc((c.text||'').slice(0,200)), esc(c.postId||'')]));
+  if(fb.posts.length) {
+    fbHtml += '<h3>Posts ('+fb.posts.length+')</h3>';
+    for (const p of fb.posts) {
+      const bits = [];
+      if (p.commentCount) bits.push(p.commentCount+' comment'+(p.commentCount===1?'':'s'));
+      if (p.reactionCount) bits.push(p.reactionCount+' reaction'+(p.reactionCount===1?'':'s'));
+      fbHtml += '<div class="post-block"><h4>'+esc(p.authorName||'Post')+' <span class="muted">'+esc(p.postId||'')+'</span></h4>';
+      if (bits.length) fbHtml += '<p class="muted">'+esc(bits.join(' · '))+'</p>';
+      if (p.text) fbHtml += '<p>'+esc(p.text.slice(0,500))+'</p>';
+      if (p.url) fbHtml += '<p><a href="'+esc(p.url)+'">Open post</a></p>';
+      if (p.partialParse) fbHtml += '<p class="health-warn">Partial parse</p>';
+      if (p.linkedComments?.length) {
+        fbHtml += '<p><strong>Comments</strong></p>'+table(['Author','Text'], p.linkedComments.map(c=>[esc(c.authorName||''), esc((c.text||'').slice(0,200))]));
+      }
+      if (p.linkedReactions?.length) {
+        fbHtml += '<p><strong>Reactions</strong></p>'+table(['User'], p.linkedReactions.map(r=>[esc(r.userName)]));
+      }
+      fbHtml += '</div>';
+    }
+  }
+  if(fb.reactions.length) fbHtml += '<h3>All reactions ('+fb.reactions.length+')</h3>'+table(['User','Post ID','Total','Source'], fb.reactions.map(r=>[esc(r.userName), esc(r.postId||''), esc(r.reactionCount??''), esc(r.source)]));
   if(!fb.groups.length && !fb.people.length && !fb.posts.length && !fb.reactions.length && !fb.comments.length) fbHtml += '<p class="muted">GraphQL captured but no group entities extracted yet.</p>';
 }
 document.getElementById('facebook').innerHTML = fbHtml;

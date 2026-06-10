@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeCommentPostId,
   decodeFeedbackPostId,
   extractStoryTextsFromPartialJson,
   isNoisePostText,
@@ -10,6 +11,22 @@ import {
 describe("facebook parse helpers", () => {
   it("decodes feedback id to post id", () => {
     expect(decodeFeedbackPostId("ZmVlZGJhY2s6MjcwMjE2NzAxODQxMjc0NTY=")).toBe("27021670184127456");
+  });
+
+  it("decodes comment id to post id", () => {
+    expect(
+      decodeCommentPostId(
+        "Y29tbWVudDoyNzAwMzExMDMyNTk4MzQ0Ml8yNzAwNTA2ODE1NTc4NzY1OQ==",
+      ),
+    ).toBe("27003110325983442");
+  });
+
+  it("decodes feedback-prefixed comment id to post id", () => {
+    expect(
+      decodeCommentPostId(
+        "ZmVlZGJhY2s6MjcwMDMxMTAzMjU5ODM0NDJfMjcwMDUwNjgxNTU3ODc2NTk=",
+      ),
+    ).toBe("27003110325983442");
   });
 
   it("extracts story text from truncated JSON line", () => {

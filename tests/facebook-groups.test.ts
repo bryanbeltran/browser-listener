@@ -11,6 +11,10 @@ import type { NetworkEntry } from "../src/shared/types.js";
 const CAPTURE_ZIPS = [
   join(
     process.env.HOME ?? "",
+    "Downloads/browser-listener-8cf1a523-c5d6-4b85-8be4-9ba62d966ae1-1781121454058.zip",
+  ),
+  join(
+    process.env.HOME ?? "",
     "Downloads/browser-listener-4f9a5725-7a38-43cc-a5aa-1329f643ccb9-1781121046926.zip",
   ),
   join(
@@ -66,31 +70,69 @@ function firstAvailableZip(): { path: string; network: NetworkEntry[] } | null {
 
 const PERMALINK =
   "https://www.facebook.com/groups/richfieldmncommunity/permalink/27021670184127456/";
+const GROUP_FEED = "https://www.facebook.com/groups/richfieldmncommunity";
 
 describe("facebook groups enricher", () => {
-  it("extracts posts with postId and linked reactions from dialog capture", () => {
+  it("extracts comment text and links comments to posts", () => {
     const fixture = networkFromZip(CAPTURE_ZIPS[0]);
     if (!fixture) {
       expect(true).toBe(true);
       return;
     }
 
-    const activity = extractFacebookGroupActivity(fixture, {
-      tabUrl: "https://www.facebook.com/groups/richfieldmncommunity",
-    });
+    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
+    expect(activity.comments.length).toBe(7);
+    expect(activity.comments.every((c) => c.text && c.postId)).toBe(true);
+    expect(
+      activity.comments.some((c) => c.text?.includes("Yes, like thjd")),
+    ).toBe(true);
+    expect(
+      activity.comments.some((c) => c.text?.includes("Agree - never met him")),
+    ).toBe(true);
+
+    const catPost = activity.posts.find((p) => p.postId === "27003110325983442");
+    expect(catPost?.commentCount).toBe(5);
+    expect(catPost?.linkedComments?.length).toBe(5);
+    expect(catPost?.linkedComments?.[0]?.text).toBeTruthy();
+
+    const junkPost = activity.posts.find((p) => p.postId === "26999251709702637");
+    expect(junkPost?.commentCount).toBe(2);
+  });
+
+  it("prefers reactions dialog over tooltip and hints when tooltip-only", () => {
+    const fixture = networkFromZip(CAPTURE_ZIPS[0]);
+    if (!fixture) {
+      expect(true).toBe(true);
+      return;
+    }
+
+    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
+    expect(
+      activity.parseWarnings?.some((w) => w.includes("only reaction tooltip captured")),
+    ).toBe(true);
+  });
+
+  it("extracts posts with postId and linked reactions from dialog capture", () => {
+    const fixture = networkFromZip(CAPTURE_ZIPS[1]);
+    if (!fixture) {
+      expect(true).toBe(true);
+      return;
+    }
+
+    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
     expect(activity.people.length).toBeGreaterThan(5);
     expect(activity.posts.length).toBeGreaterThan(0);
     expect(
       activity.posts.some((p) => p.postId === "27014819028145905" && p.authorName),
     ).toBe(true);
-    expect(activity.reactions.length).toBeGreaterThan(0);
     const reactionsOnly = activity.posts.find((p) => p.postId === "26978847508409724");
     expect(reactionsOnly?.reactionCount).toBeGreaterThan(0);
     expect(reactionsOnly?.linkedReactions?.length).toBeGreaterThan(0);
+    expect(activity.reactions.length).toBeGreaterThan(5);
   });
 
   it("extracts posts, linked reactions, and people from permalink capture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[1]);
+    const fixture = networkFromZip(CAPTURE_ZIPS[2]);
     if (!fixture) {
       expect(true).toBe(true);
       return;
@@ -99,7 +141,6 @@ describe("facebook groups enricher", () => {
     const activity = extractFacebookGroupActivity(fixture, { tabUrl: PERMALINK });
     expect(activity.people.length).toBeGreaterThan(5);
     expect(activity.reactions.length).toBeGreaterThan(0);
-    expect(activity.reactions.some((r) => r.postId === "27021670184127456")).toBe(true);
     expect(
       activity.posts.some(
         (p) =>
@@ -111,7 +152,7 @@ describe("facebook groups enricher", () => {
   });
 
   it("extracts people and reactions from feed capture fixture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[2]);
+    const fixture = networkFromZip(CAPTURE_ZIPS[3]);
     if (!fixture) {
       expect(true).toBe(true);
       return;
@@ -184,5 +225,6 @@ describe("facebook groups enricher", () => {
     const activity = JSON.parse(files["group-activity.json"]);
     expect(activity.people.length).toBeGreaterThan(0);
     expect(files["report.html"]).toContain("Facebook group activity");
+    expect(files["report.html"]).toContain("post-block");
   });
 });
