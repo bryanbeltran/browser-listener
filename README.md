@@ -129,7 +129,7 @@ Configure via `setRedactionConfig()` in `src/redaction/engine.ts` (runtime API f
 
 ## Enrichers
 
-Register optional enrichers in `src/enrichers/index.ts`. Enable per session via `CaptureOptions.enricherIds`. Keep Oracle BUI, branding, and product-specific logic **out of core**.
+Register optional enrichers in `src/enrichers/index.ts`. Enable per session via `CaptureOptions.enricherIds`. Keep branding and product-specific logic **out of core**.
 
 ## Reliability
 
