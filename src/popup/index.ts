@@ -188,5 +188,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+const versionEl = el("app-version");
+if (versionEl) versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
+
 void refresh();
 setInterval(() => void refresh(), 2000);

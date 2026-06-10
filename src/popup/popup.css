@@ -24,9 +24,29 @@ body {
   }
 }
 
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.header-titles {
+  min-width: 0;
+}
+
 h1 {
   font-size: 1rem;
   margin: 0;
+}
+
+.version-label {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  opacity: 0.45;
+  line-height: 1.2;
+  margin-top: 2px;
 }
 
 .tagline {
