@@ -25,6 +25,12 @@ describe("api body capture", () => {
     expect(apiBodyCapForRequest("doc_id=1")).toBe(API_BODY_LIMITS.perResponse);
   });
 
+  it("uses larger cap for single post dialog GraphQL", () => {
+    const postData =
+      "fb_api_req_friendly_name=CometSinglePostDialogContentQuery&doc_id=123";
+    expect(apiBodyCapForRequest(postData)).toBe(API_BODY_LIMITS.perResponseLarge);
+  });
+
   it("matches Facebook GraphQL and bulk-route URLs only", () => {
     expect(shouldCaptureApiBody("https://www.facebook.com/api/graphql/")).toBe(true);
     expect(shouldCaptureApiBody("https://www.facebook.com/ajax/bulk-route-definitions/")).toBe(

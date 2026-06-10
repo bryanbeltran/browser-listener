@@ -80,7 +80,13 @@ export function extractCommentsFromPartialJson(
 
 export function permalinkPostId(tabUrl?: string): string | undefined {
   if (!tabUrl) return undefined;
-  const m = tabUrl.match(/\/permalink\/(\d+)/);
+  return postIdFromFacebookUrl(tabUrl);
+}
+
+/** Numeric post id from `/posts/{id}` or `/permalink/{id}` URLs. */
+export function postIdFromFacebookUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  const m = url.match(/\/(?:posts|permalink)\/(\d+)/);
   return m?.[1];
 }
 

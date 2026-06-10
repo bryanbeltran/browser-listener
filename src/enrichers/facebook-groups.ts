@@ -5,6 +5,7 @@ import {
   groupPermalinkUrl,
   parseGraphqlLines,
   permalinkPostId,
+  postIdFromFacebookUrl,
 } from "./facebook-parse.js";
 import type {
   FacebookComment,
@@ -85,6 +86,48 @@ export interface ExtractFacebookOptions {
   tabUrl?: string;
 }
 
+function linkPostsToReactions(
+  posts: FacebookPost[],
+  reactions: FacebookReaction[],
+): FacebookPost[] {
+  const byPostId = new Map<string, FacebookReaction[]>();
+  for (const r of reactions) {
+    if (!r.postId) continue;
+    const list = byPostId.get(r.postId) ?? [];
+    list.push(r);
+    byPostId.set(r.postId, list);
+  }
+
+  const linked = posts.map((post) => {
+    const postId = post.postId ?? postIdFromFacebookUrl(post.url);
+    const matched = postId ? byPostId.get(postId) ?? [] : [];
+    if (matched.length === 0) {
+      return postId && !post.postId ? { ...post, postId } : post;
+    }
+    return {
+      ...post,
+      postId,
+      feedbackId: post.feedbackId ?? matched[0]?.feedbackId,
+      reactionCount: matched.length,
+      linkedReactions: matched.map((r) => ({ userId: r.userId, userName: r.userName })),
+    };
+  });
+
+  for (const [postId, matched] of byPostId) {
+    if (linked.some((p) => p.postId === postId)) continue;
+    linked.push({
+      id: `reactions-only:${postId}`,
+      postId,
+      feedbackId: matched[0]?.feedbackId,
+      source: "reactions_inferred",
+      reactionCount: matched.length,
+      linkedReactions: matched.map((r) => ({ userId: r.userId, userName: r.userName })),
+    });
+  }
+
+  return linked;
+}
+
 export function extractFacebookGroupActivity(
   network: NetworkEntry[],
   opts: ExtractFacebookOptions = {},
@@ -119,21 +162,29 @@ export function extractFacebookGroupActivity(
     if (url?.includes("/groups/") && !primaryGroupUrl) primaryGroupUrl = url;
   };
 
+  const normalizePost = (post: FacebookPost): FacebookPost => ({
+    ...post,
+    postId: post.postId ?? postIdFromFacebookUrl(post.url),
+  });
+
   const addPost = (post: FacebookPost) => {
-    const key = postKey(post.id);
+    const normalized = normalizePost(post);
+    const key = postKey(normalized.id);
     const existing = posts.get(key);
     if (!existing) {
-      posts.set(key, post);
+      posts.set(key, normalized);
       return;
     }
-    posts.set(key, {
+    posts.set(key, normalizePost({
       ...existing,
-      ...post,
-      text: post.text ?? existing.text,
-      url: post.url ?? existing.url,
-      authorName: post.authorName ?? existing.authorName,
-      authorId: post.authorId ?? existing.authorId,
-    });
+      ...normalized,
+      text: normalized.text ?? existing.text,
+      url: normalized.url ?? existing.url,
+      authorName: normalized.authorName ?? existing.authorName,
+      authorId: normalized.authorId ?? existing.authorId,
+      postId: normalized.postId ?? existing.postId,
+      feedbackId: normalized.feedbackId ?? existing.feedbackId,
+    }));
   };
 
   for (const entry of network) {
@@ -282,26 +333,34 @@ export function extractFacebookGroupActivity(
             authorName = typeof a.name === "string" ? a.name : undefined;
             authorId = typeof a.id === "string" ? a.id : undefined;
           }
-          const storyPostId =
-            typeof story.post_id === "string"
-              ? story.post_id
-              : typeof story.post_id === "number"
-                ? String(story.post_id)
-                : sessionPostId;
           const url =
             typeof story.url === "string"
               ? story.url
-              : storyPostId
-                ? groupPermalinkUrl(primaryGroupUrl ?? opts.tabUrl, storyPostId)
-                : undefined;
+              : undefined;
+          const storyPostId =
+            postIdFromFacebookUrl(url) ??
+            (typeof story.post_id === "string"
+              ? story.post_id
+              : typeof story.post_id === "number"
+                ? String(story.post_id)
+                : sessionPostId);
+          const storyFeedback =
+            story.feedback && typeof story.feedback === "object"
+              ? (story.feedback as { id?: string }).id
+              : undefined;
           addPost({
             id: story.id,
             postId: storyPostId,
+            feedbackId: storyFeedback,
             text,
             authorId,
             authorName,
             createdAt: typeof story.creation_time === "number" ? story.creation_time : undefined,
-            url,
+            url:
+              url ??
+              (storyPostId
+                ? groupPermalinkUrl(primaryGroupUrl ?? opts.tabUrl, storyPostId)
+                : undefined),
             source,
           });
         }
@@ -324,12 +383,13 @@ export function extractFacebookGroupActivity(
     }
   }
 
+  const linkedPosts = linkPostsToReactions([...posts.values()], reactions);
   const uniqueWarnings = [...new Set(parseWarnings)];
 
   return {
     groups: [...groups.values()],
     people: [...people.values()],
-    posts: [...posts.values()],
+    posts: linkedPosts,
     comments: [...comments.values()],
     reactions,
     graphqlQueryHints: [...queryHints.values()].sort((a, b) => b.count - a.count),

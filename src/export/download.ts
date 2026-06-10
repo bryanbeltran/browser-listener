@@ -17,11 +17,11 @@ function downloadUrl(url: string, filename: string, saveAs: boolean): Promise<vo
   });
 }
 
-/** Popup / extension pages — blob URL + optional Save As (needs user gesture). */
+/** Popup / extension pages — blob URL; saves to default Downloads folder. */
 export async function downloadZipFromPage(
   zip: Uint8Array,
   filename: string,
-  saveAs = true,
+  saveAs = false,
 ): Promise<void> {
   const copy = new Uint8Array(zip);
   const url = URL.createObjectURL(new Blob([copy], { type: "application/zip" }));

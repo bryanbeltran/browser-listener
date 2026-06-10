@@ -12,7 +12,7 @@ export const API_BODY_LIMITS = {
 } as const;
 
 const LARGE_BODY_QUERY =
-  /CometNewsFeedPagination|CometUFI|Comments|Story|permalink/i;
+  /CometNewsFeedPagination|CometSinglePostDialog|CometUFI|Comments|Story|permalink/i;
 
 export function apiBodyCapForRequest(postData?: string): number {
   if (!postData) return API_BODY_LIMITS.perResponse;

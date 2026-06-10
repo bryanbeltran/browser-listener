@@ -46,6 +46,9 @@ export interface FacebookPost {
   source: string;
   /** Extracted from truncated / non-JSON GraphQL line. */
   partialParse?: boolean;
+  /** Reactors captured for this post id in this session. */
+  reactionCount?: number;
+  linkedReactions?: { userId: string; userName: string }[];
 }
 
 export interface FacebookComment {

@@ -11,6 +11,10 @@ import type { NetworkEntry } from "../src/shared/types.js";
 const CAPTURE_ZIPS = [
   join(
     process.env.HOME ?? "",
+    "Downloads/browser-listener-4f9a5725-7a38-43cc-a5aa-1329f643ccb9-1781121046926.zip",
+  ),
+  join(
+    process.env.HOME ?? "",
     "Downloads/browser-listener-525fe264-3b9c-43d0-83e0-fb378e733718-1781120390899.zip",
   ),
   join(
@@ -64,8 +68,29 @@ const PERMALINK =
   "https://www.facebook.com/groups/richfieldmncommunity/permalink/27021670184127456/";
 
 describe("facebook groups enricher", () => {
-  it("extracts posts, linked reactions, and people from permalink capture", () => {
+  it("extracts posts with postId and linked reactions from dialog capture", () => {
     const fixture = networkFromZip(CAPTURE_ZIPS[0]);
+    if (!fixture) {
+      expect(true).toBe(true);
+      return;
+    }
+
+    const activity = extractFacebookGroupActivity(fixture, {
+      tabUrl: "https://www.facebook.com/groups/richfieldmncommunity",
+    });
+    expect(activity.people.length).toBeGreaterThan(5);
+    expect(activity.posts.length).toBeGreaterThan(0);
+    expect(
+      activity.posts.some((p) => p.postId === "27014819028145905" && p.authorName),
+    ).toBe(true);
+    expect(activity.reactions.length).toBeGreaterThan(0);
+    const reactionsOnly = activity.posts.find((p) => p.postId === "26978847508409724");
+    expect(reactionsOnly?.reactionCount).toBeGreaterThan(0);
+    expect(reactionsOnly?.linkedReactions?.length).toBeGreaterThan(0);
+  });
+
+  it("extracts posts, linked reactions, and people from permalink capture", () => {
+    const fixture = networkFromZip(CAPTURE_ZIPS[1]);
     if (!fixture) {
       expect(true).toBe(true);
       return;
@@ -86,7 +111,7 @@ describe("facebook groups enricher", () => {
   });
 
   it("extracts people and reactions from feed capture fixture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[1]);
+    const fixture = networkFromZip(CAPTURE_ZIPS[2]);
     if (!fixture) {
       expect(true).toBe(true);
       return;

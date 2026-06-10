@@ -26,7 +26,17 @@ export function buildFacebookCsvFiles(
 
   if (activity.posts.length) {
     files["csv/posts.csv"] = toCsv(
-      ["id", "postId", "feedbackId", "authorName", "text", "url", "source", "partialParse"],
+      [
+        "id",
+        "postId",
+        "feedbackId",
+        "authorName",
+        "text",
+        "url",
+        "reactionCount",
+        "source",
+        "partialParse",
+      ],
       activity.posts.map((p) => [
         p.id,
         p.postId,
@@ -34,6 +44,7 @@ export function buildFacebookCsvFiles(
         p.authorName,
         p.text,
         p.url,
+        p.reactionCount,
         p.source,
         p.partialParse ? "yes" : "",
       ]),

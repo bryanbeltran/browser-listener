@@ -95,7 +95,7 @@ async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
   if (!res.ok) throw new Error(res.error ?? "Export failed");
   if (!res.zipBase64 || !res.filename) throw new Error("Export returned no file");
   const zip = base64ToUint8(res.zipBase64);
-  await downloadZipFromPage(zip, res.filename, true);
+  await downloadZipFromPage(zip, res.filename);
 }
 
 btnStart?.addEventListener("click", async () => {

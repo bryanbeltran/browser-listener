@@ -4,6 +4,7 @@ import {
   extractStoryTextsFromPartialJson,
   isNoisePostText,
   permalinkPostId,
+  postIdFromFacebookUrl,
 } from "../src/enrichers/facebook-parse.js";
 
 describe("facebook parse helpers", () => {
@@ -28,5 +29,13 @@ describe("facebook parse helpers", () => {
         "https://www.facebook.com/groups/richfieldmncommunity/permalink/27021670184127456/",
       ),
     ).toBe("27021670184127456");
+  });
+
+  it("reads post id from group posts URL", () => {
+    expect(
+      postIdFromFacebookUrl(
+        "https://www.facebook.com/groups/richfieldmncommunity/posts/27014819028145905/",
+      ),
+    ).toBe("27014819028145905");
   });
 });
