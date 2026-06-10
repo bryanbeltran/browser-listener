@@ -1,0 +1,6 @@
+#!/bin/sh
+# Bump patch version before each commit (included in the commit). dist/ rebuilds in post-commit.
+# Skip: SKIP_VERSION_BUMP=1 git commit ...
+set -e
+cd "$(git rev-parse --show-toplevel)"
+node scripts/bump-and-build.mjs --stage

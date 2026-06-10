@@ -13,6 +13,8 @@ export function buildExportManifest(
       screenRecording: false,
       tabAudio: false,
       staticAssetBodies: false,
+      graphqlBodies: true,
+      consoleCapture: false,
       enricherIds: [],
     },
     files,
@@ -28,7 +30,13 @@ export function buildExportManifest(
   };
 }
 
-export function baseManifestFiles(options: CaptureOptions): ArtifactManifestEntry[] {
+export function baseManifestFiles(
+  options: CaptureOptions,
+  includePageMhtml = false,
+  includeGroupActivity = false,
+  includeGraphqlCaptures = false,
+  csvPaths: string[] = [],
+): ArtifactManifestEntry[] {
   return [
     { path: "report.html", kind: "report", optional: false, enabled: true },
     { path: "trace-summary.json", kind: "json", optional: false, enabled: true },
@@ -37,7 +45,12 @@ export function baseManifestFiles(options: CaptureOptions): ArtifactManifestEntr
     { path: "console.json", kind: "json", optional: false, enabled: true },
     { path: "diagnostics.json", kind: "json", optional: false, enabled: true },
     { path: "export-manifest.json", kind: "json", optional: false, enabled: true },
-    { path: "repro-recipe.txt", kind: "other", optional: false, enabled: true },
+    {
+      path: "artifacts/page.mhtml",
+      kind: "asset",
+      optional: true,
+      enabled: includePageMhtml,
+    },
     {
       path: "artifacts/screen.webm",
       kind: "video",
@@ -56,5 +69,25 @@ export function baseManifestFiles(options: CaptureOptions): ArtifactManifestEntr
       optional: true,
       enabled: options.staticAssetBodies,
     },
+    {
+      path: "group-activity.json",
+      kind: "json",
+      optional: true,
+      enabled: includeGroupActivity,
+    },
+    {
+      path: "graphql-captures.json",
+      kind: "json",
+      optional: true,
+      enabled: includeGraphqlCaptures,
+    },
+    ...csvPaths.map(
+      (path): ArtifactManifestEntry => ({
+        path,
+        kind: "json",
+        optional: true,
+        enabled: true,
+      }),
+    ),
   ];
 }

@@ -1,13 +1,15 @@
 import { broadcastCaptureState } from "../background/broadcast.js";
-import { appendConsole, upsertNetwork } from "../persistence/store.js";
+import { appendConsole, readSessionData, upsertNetwork } from "../persistence/store.js";
 import { updateDebuggerHealth } from "../persistence/session-recovery.js";
 import { recordHealthGap } from "../persistence/store.js";
+import { captureApiBodiesForRequest, shouldCaptureApiBody } from "./api-body-capture.js";
 import { getActiveSession } from "./session-manager.js";
 import { recordTimeline } from "./timeline.js";
 import type { ConsoleEntry, NetworkEntry } from "../shared/types.js";
 
 const CDP_VERSION = "1.3";
 const pendingCdp = new Map<string, Partial<NetworkEntry>>();
+const pendingBodyCaptures = new Set<Promise<void>>();
 let attachedTabId: number | null = null;
 let recoverTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -116,7 +118,25 @@ async function onDebuggerEvent(
     await upsertNetwork(entry);
   }
 
+  if (method === "Network.loadingFinished") {
+    const requestId = String(p?.requestId ?? "");
+    const pending = pendingCdp.get(requestId);
+    if (!pending?.url || source.tabId == null) return;
+    const tabId = source.tabId;
+    const base = pending as NetworkEntry;
+    const job = (async () => {
+      const bodies = await captureApiBodiesForRequest(tabId, requestId, base);
+      if (Object.keys(bodies).length === 0) return;
+      const updated: NetworkEntry = { ...base, ...bodies };
+      pendingCdp.set(requestId, updated);
+      await upsertNetwork(updated);
+    })();
+    pendingBodyCaptures.add(job);
+    void job.finally(() => pendingBodyCaptures.delete(job));
+  }
+
   if (method === "Runtime.consoleAPICalled") {
+    if (!session.options.consoleCapture) return;
     const args = ((p?.args as { value?: unknown; description?: string }[]) ?? []).map((a) =>
       String(a.description ?? a.value ?? ""),
     );
@@ -135,15 +155,42 @@ async function onDebuggerEvent(
   }
 
   if (method === "Runtime.exceptionThrown") {
-    const details = p?.exceptionDetails as { text?: string; stackTrace?: { description?: string } };
+    if (!session.options.consoleCapture) return;
+    const details = p?.exceptionDetails as {
+      text?: string;
+      exception?: { description?: string; value?: string };
+      stackTrace?: {
+        description?: string;
+        callFrames?: {
+          functionName?: string;
+          url?: string;
+          lineNumber?: number;
+          columnNumber?: number;
+        }[];
+      };
+    };
+    const stack =
+      details?.stackTrace?.description ??
+      details?.stackTrace?.callFrames
+        ?.map((f) => {
+          const fn = f.functionName || "<anonymous>";
+          const loc = f.url ? `${f.url}:${f.lineNumber ?? 0}:${f.columnNumber ?? 0}` : "";
+          return loc ? `    at ${fn} (${loc})` : `    at ${fn}`;
+        })
+        .join("\n");
+    const msg =
+      details?.text ??
+      details?.exception?.description ??
+      details?.exception?.value ??
+      "exception";
     const entry: ConsoleEntry = {
       id: crypto.randomUUID(),
       sessionId: session.id,
       timestamp: Date.now(),
       level: "error",
-      args: [details?.text ?? "exception"],
+      args: [msg],
       url: session.tabUrl ?? "",
-      stack: details?.stackTrace?.description,
+      stack,
       tabId: source.tabId,
       source: "debugger",
     };
@@ -161,6 +208,12 @@ export function registerDebuggerCapture(): void {
     attachedTabId = null;
     void updateDebuggerHealth({ detached: true });
     void recordHealthGap(`debugger_detach: ${reason}`);
+
+    if (reason === "canceled_by_user") {
+      void import("./stop-export.js").then((m) => m.stopAndExportInBackground());
+      return;
+    }
+
     void getActiveSession().then((s) => {
       if (!s?.active) return;
       void broadcastCaptureState(true, s.id, false);
@@ -182,4 +235,33 @@ export function getAttachedTabId(): number | null {
 
 export function isDebuggerAttachedToTab(tabId: number): boolean {
   return attachedTabId === tabId;
+}
+
+/** Await in-flight body fetches and sweep pending CDP entries before debugger detach. */
+export async function flushPendingApiBodyCaptures(): Promise<void> {
+  await Promise.all([...pendingBodyCaptures]);
+  const tabId = attachedTabId;
+  if (tabId == null) return;
+  const session = await getActiveSession();
+  if (!session?.options.graphqlBodies) return;
+
+  const sweep = async (requestId: string, base: NetworkEntry): Promise<void> => {
+    if (!base.url || !shouldCaptureApiBody(base.url) || base.bodyCaptured) return;
+    if (!base.statusCode) return;
+    const bodies = await captureApiBodiesForRequest(tabId, requestId, base);
+    if (Object.keys(bodies).length === 0) return;
+    const updated: NetworkEntry = { ...base, ...bodies };
+    pendingCdp.set(requestId, updated);
+    await upsertNetwork(updated);
+  };
+
+  for (const [requestId, pending] of pendingCdp) {
+    await sweep(requestId, pending as NetworkEntry);
+  }
+
+  const stored = await readSessionData();
+  for (const entry of stored.network) {
+    if (entry.bodyCaptured || !entry.requestId) continue;
+    await sweep(entry.requestId, entry);
+  }
 }

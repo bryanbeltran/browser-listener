@@ -7,6 +7,7 @@ describe("browser extension entrypoints", () => {
     expect(manifest.background.service_worker).toBe("background.js");
     expect(manifest.content_scripts[0].js).toContain("content.js");
     expect(manifest.content_scripts[0].all_frames).toBe(true);
+    expect(manifest.action.default_popup).toBe("popup.html");
   });
 
   it("export orchestrator module loads", async () => {

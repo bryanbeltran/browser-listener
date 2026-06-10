@@ -13,7 +13,6 @@ describe("zip builder", () => {
         console: "[]",
         diagnostics: "{}",
         manifest: "{}",
-        repro: "steps",
       }),
     );
     const files = unzipToMap(zip);
@@ -24,7 +23,6 @@ describe("zip builder", () => {
         "export-manifest.json",
         "network.har",
         "report.html",
-        "repro-recipe.txt",
         "timeline.json",
         "trace-summary.json",
       ].sort(),

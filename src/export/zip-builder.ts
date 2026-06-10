@@ -19,9 +19,10 @@ export function zipFileMapFromExport(bundle: {
   console: string;
   diagnostics: string;
   manifest: string;
-  repro: string;
+  graphqlCaptures?: string;
+  groupActivity?: string;
 }): ZipFileMap {
-  return {
+  const map: ZipFileMap = {
     "report.html": bundle.reportHtml,
     "trace-summary.json": bundle.traceSummary,
     "network.har": bundle.har,
@@ -29,8 +30,10 @@ export function zipFileMapFromExport(bundle: {
     "console.json": bundle.console,
     "diagnostics.json": bundle.diagnostics,
     "export-manifest.json": bundle.manifest,
-    "repro-recipe.txt": bundle.repro,
   };
+  if (bundle.graphqlCaptures) map["graphql-captures.json"] = bundle.graphqlCaptures;
+  if (bundle.groupActivity) map["group-activity.json"] = bundle.groupActivity;
+  return map;
 }
 
 export function sessionDiagnosticsJson(data: SessionData): string {

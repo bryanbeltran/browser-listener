@@ -12,45 +12,47 @@
       <p class="tagline">Privacy-first local session recorder</p>
     </header>
 
-    <section id="consent-panel" class="panel">
-      <p class="consent-text">
+    <section id="loading-panel" class="panel">
+      <p class="status">Loading…</p>
+    </section>
+
+    <section id="start-panel" class="panel hidden">
+      <p class="intro-text">
         Recording stays on this device. No upload, no telemetry. Sensitive headers, cookies,
         tokens, and form values are redacted by default.
       </p>
-      <label class="checkbox">
-        <input type="checkbox" id="consent-check" />
-        I consent to capture on the active tab
-      </label>
       <details class="advanced">
-        <summary>Advanced options (off by default)</summary>
+        <summary>Advanced options</summary>
         <label class="checkbox"><input type="checkbox" id="opt-screen" disabled /> Screen recording (coming soon)</label>
         <label class="checkbox"><input type="checkbox" id="opt-audio" disabled /> Tab audio (coming soon)</label>
         <label class="checkbox"><input type="checkbox" id="opt-bodies" disabled /> Static asset bodies (coming soon)</label>
+        <label class="checkbox"><input type="checkbox" id="opt-graphql-bodies" checked /> Capture API bodies (GraphQL)</label>
+        <label class="checkbox"><input type="checkbox" id="opt-console" /> Capture console logs</label>
+        <p class="hint">GraphQL bodies on by default (Facebook <code>/api/graphql</code> only). Console off by default.</p>
       </details>
-      <button type="button" id="btn-start" disabled>Start capture</button>
+      <button type="button" id="btn-start" class="primary">Start capture</button>
     </section>
 
     <section id="active-panel" class="panel hidden">
       <p id="status" class="status active">Capturing…</p>
       <div class="counts">
-        <span>Console <strong id="c-console">0</strong></span>
         <span>Network <strong id="c-network">0</strong></span>
-        <span>Actions <strong id="c-actions">0</strong></span>
+        <span>Timeline <strong id="c-timeline">0</strong></span>
       </div>
       <p id="health-hint" class="hint"></p>
-      <button type="button" id="btn-stop-export" class="primary">Stop and export ZIP</button>
+      <button type="button" id="btn-stop" class="primary">Stop &amp; download ZIP</button>
+      <p class="hint stop-hint">Stops capture and downloads a ZIP to this device.</p>
     </section>
 
     <section id="export-panel" class="panel hidden">
       <p id="export-status" class="status">Capture ended</p>
       <div class="counts">
-        <span>Console <strong id="e-console">0</strong></span>
         <span>Network <strong id="e-network">0</strong></span>
-        <span>Actions <strong id="e-actions">0</strong></span>
+        <span>Timeline <strong id="e-timeline">0</strong></span>
       </div>
       <p id="export-hint" class="hint"></p>
-      <button type="button" id="btn-export" class="primary">Export ZIP</button>
-      <button type="button" id="btn-new-session" class="secondary">Start new capture</button>
+      <button type="button" id="btn-export" class="secondary">Download ZIP again</button>
+      <button type="button" id="btn-new-session" class="primary">Start new capture</button>
     </section>
 
     <p class="hint footer">Reload the target tab after install. Export is local ZIP only.</p>

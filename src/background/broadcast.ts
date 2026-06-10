@@ -7,6 +7,7 @@ export interface CaptureStatePayload {
   sessionId: string | null;
   /** When true, console comes from CDP — content script must not wrap console.* */
   debuggerConsole: boolean;
+  consoleCapture: boolean;
 }
 
 export async function broadcastCaptureState(
@@ -26,6 +27,7 @@ export async function broadcastCaptureState(
     sessionId,
     debuggerConsole:
       debuggerConsole ?? (active ? (session?.health.debuggerAttached ?? false) : false),
+    consoleCapture: active ? (session?.options.consoleCapture ?? false) : false,
   };
 
   try {

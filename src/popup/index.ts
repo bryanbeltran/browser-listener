@@ -1,123 +1,192 @@
 import { MessageType } from "../shared/messages.js";
-import type { PopupStateResponse } from "../shared/messages.js";
+import type { ExportZipResponse } from "../shared/messages.js";
+import { base64ToUint8 } from "../shared/bytes.js";
+import { downloadZipFromPage } from "../export/download.js";
 import { hasTruncation } from "../persistence/limits.js";
+import type { PopupStateResponse } from "../shared/messages.js";
+import { readPopupState } from "./popup-state.js";
+import { sendMessageWithTimeout } from "./messaging.js";
 
-const consentPanel = document.getElementById("consent-panel")!;
-const activePanel = document.getElementById("active-panel")!;
-const exportPanel = document.getElementById("export-panel")!;
-const consentCheck = document.getElementById("consent-check") as HTMLInputElement;
-const btnStart = document.getElementById("btn-start") as HTMLButtonElement;
-const btnStopExport = document.getElementById("btn-stop-export") as HTMLButtonElement;
-const btnExport = document.getElementById("btn-export") as HTMLButtonElement;
-const btnNewSession = document.getElementById("btn-new-session") as HTMLButtonElement;
-const statusEl = document.getElementById("status")!;
-const healthHint = document.getElementById("health-hint")!;
-const exportStatus = document.getElementById("export-status")!;
-const exportHint = document.getElementById("export-hint")!;
-const cConsole = document.getElementById("c-console")!;
-const cNetwork = document.getElementById("c-network")!;
-const cActions = document.getElementById("c-actions")!;
-const eConsole = document.getElementById("e-console")!;
-const eNetwork = document.getElementById("e-network")!;
-const eActions = document.getElementById("e-actions")!;
+const EMPTY_STATE: PopupStateResponse = {
+  session: null,
+  counts: { console: 0, network: 0, timeline: 0 },
+  canExport: false,
+};
 
-async function send<T>(type: string, extra: object = {}): Promise<T> {
-  return chrome.runtime.sendMessage({ type, ...extra }) as Promise<T>;
+function el<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
 }
+
+const loadingPanel = el("loading-panel");
+const startPanel = el("start-panel");
+const activePanel = el("active-panel");
+const exportPanel = el("export-panel");
+const optGraphqlBodies = el<HTMLInputElement>("opt-graphql-bodies");
+const optConsole = el<HTMLInputElement>("opt-console");
+const btnStart = el<HTMLButtonElement>("btn-start");
+const btnStop = el<HTMLButtonElement>("btn-stop");
+const btnExport = el<HTMLButtonElement>("btn-export");
+const btnNewSession = el<HTMLButtonElement>("btn-new-session");
+const statusEl = el("status");
+const healthHint = el("health-hint");
+const exportStatus = el("export-status");
+const exportHint = el("export-hint");
+const cNetwork = el("c-network");
+const cTimeline = el("c-timeline");
+const eNetwork = el("e-network");
+const eTimeline = el("e-timeline");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
-  const t = session?.health.truncation;
+  const t = session?.health?.truncation;
   if (!t || !hasTruncation(t)) return "";
-  return `Truncated: console −${t.console}, network −${t.network}, timeline −${t.timeline}, actions −${t.userActions}`;
+  return `Truncated: console −${t.console}, network −${t.network}, timeline −${t.timeline}`;
 }
 
-function render(state: PopupStateResponse): void {
+function setText(node: HTMLElement | null, text: string): void {
+  if (node) node.textContent = text;
+}
+
+function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true): void {
   const active = state.session?.active ?? false;
   const canExport = state.canExport;
 
-  consentPanel.classList.toggle("hidden", active || canExport);
-  activePanel.classList.toggle("hidden", !active);
-  exportPanel.classList.toggle("hidden", active || !canExport);
+  loadingPanel?.classList.toggle("hidden", loaded);
+  startPanel?.classList.toggle("hidden", !loaded || active || canExport);
+  activePanel?.classList.toggle("hidden", !loaded || !active);
+  exportPanel?.classList.toggle("hidden", !loaded || active || !canExport);
 
-  cConsole.textContent = String(state.counts.console);
-  cNetwork.textContent = String(state.counts.network);
-  cActions.textContent = String(state.counts.userActions);
-  eConsole.textContent = String(state.counts.console);
-  eNetwork.textContent = String(state.counts.network);
-  eActions.textContent = String(state.counts.userActions);
+  setText(cNetwork, String(state.counts.network));
+  setText(cTimeline, String(state.counts.timeline));
+  setText(eNetwork, String(state.counts.network));
+  setText(eTimeline, String(state.counts.timeline));
 
   if (active && state.session) {
-    statusEl.textContent = `Session ${state.session.id.slice(0, 8)}…`;
-    const gaps = state.session.health.partialGaps.length;
-    const dbg = state.session.health.debuggerAttached;
+    setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
+    const gaps = state.session.health?.partialGaps?.length ?? 0;
+    const dbg = state.session.health?.debuggerAttached ?? false;
     const trunc = truncationHint(state.session);
-    healthHint.textContent =
+    setText(
+      healthHint,
       trunc ||
-      (gaps
-        ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (webRequest fallback)"}`
-        : dbg
-          ? "Debugger attached"
-          : "Using webRequest metadata fallback");
+        (gaps
+          ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (webRequest fallback)"}`
+          : dbg
+            ? "Debugger attached"
+            : "Using webRequest metadata fallback"),
+    );
   }
 
   if (canExport && state.session) {
-    exportStatus.textContent = state.session.tabClosedDuringCapture
-      ? "Tab closed — partial capture ready"
-      : "Capture ended — ready to export";
+    setText(
+      exportStatus,
+      state.session.tabClosedDuringCapture
+        ? "Tab closed — partial capture ready"
+        : "Capture ended",
+    );
     const trunc = truncationHint(state.session);
-    const gaps = state.session.health.partialGaps.length;
-    exportHint.textContent =
-      trunc || (gaps ? `${gaps} capture gap(s) recorded in export health` : "Local ZIP only");
+    const gaps = state.session.health?.partialGaps?.length ?? 0;
+    setText(exportHint, trunc || (gaps ? `${gaps} capture gap(s) recorded` : "ZIP downloaded locally"));
   }
 
-  btnStart.disabled = !consentCheck.checked || active;
+  if (btnStart) btnStart.disabled = active;
 }
 
-consentCheck.addEventListener("change", () => {
-  btnStart.disabled = !consentCheck.checked;
-});
+async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
+  if (!res.ok) throw new Error(res.error ?? "Export failed");
+  if (!res.zipBase64 || !res.filename) throw new Error("Export returned no file");
+  const zip = base64ToUint8(res.zipBase64);
+  await downloadZipFromPage(zip, res.filename, true);
+}
 
-btnStart.addEventListener("click", async () => {
-  if (!consentCheck.checked) return;
+btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
   try {
-    await send(MessageType.CONSENT_AND_START, { consented: true });
+    await sendMessageWithTimeout(
+      {
+        type: MessageType.CONSENT_AND_START,
+        options: {
+          graphqlBodies: optGraphqlBodies?.checked ?? true,
+          consoleCapture: optConsole?.checked ?? false,
+        },
+      },
+      30_000,
+    );
     await refresh();
   } catch {
     btnStart.disabled = false;
   }
 });
 
-btnStopExport.addEventListener("click", async () => {
-  btnStopExport.disabled = true;
-  try {
-    await send(MessageType.STOP_AND_EXPORT);
-    consentCheck.checked = false;
-    await refresh();
-  } finally {
-    btnStopExport.disabled = false;
-  }
-});
+let captureActive = false;
+let stopRequested = false;
 
-btnExport.addEventListener("click", async () => {
-  btnExport.disabled = true;
+async function requestStopAndExport(): Promise<void> {
+  if (stopRequested) return;
+  const state = await readPopupState();
+  if (!state.session?.active) return;
+
+  stopRequested = true;
+  if (btnStop) btnStop.disabled = true;
+  setText(healthHint, "Preparing ZIP…");
   try {
-    await send(MessageType.EXPORT_CAPTURE);
+    const res = await sendMessageWithTimeout<ExportZipResponse>(
+      { type: MessageType.STOP_AND_EXPORT },
+      180_000,
+    );
+    await downloadFromResponse(res);
+    captureActive = false;
+    setText(exportHint, `Saved ${res.filename ?? "export"}`);
+    await refresh();
+  } catch (err) {
+    stopRequested = false;
+    if (btnStop) btnStop.disabled = false;
+    setText(healthHint, err instanceof Error ? err.message : "Export failed");
+  }
+}
+
+btnStop?.addEventListener("click", () => void requestStopAndExport());
+
+btnExport?.addEventListener("click", async () => {
+  btnExport.disabled = true;
+  setText(exportHint, "Preparing ZIP…");
+  try {
+    const res = await sendMessageWithTimeout<ExportZipResponse>(
+      { type: MessageType.EXPORT_CAPTURE },
+      180_000,
+    );
+    await downloadFromResponse(res);
+    setText(exportHint, `Saved ${res.filename ?? "export"}`);
+  } catch (err) {
+    setText(exportHint, err instanceof Error ? err.message : "Export failed");
   } finally {
     btnExport.disabled = false;
   }
 });
 
-btnNewSession.addEventListener("click", async () => {
-  await send(MessageType.DISCARD_CAPTURE);
-  consentCheck.checked = false;
+btnNewSession?.addEventListener("click", async () => {
+  await sendMessageWithTimeout({ type: MessageType.DISCARD_CAPTURE }, 30_000);
   await refresh();
 });
 
 async function refresh(): Promise<void> {
-  const state = await send<PopupStateResponse>(MessageType.GET_STATE);
-  render(state);
+  try {
+    const state = await readPopupState();
+    captureActive = state.session?.active ?? false;
+    if (!captureActive) stopRequested = false;
+    render(state, true);
+  } catch {
+    captureActive = false;
+    render({ session: null, counts: EMPTY_STATE.counts, canExport: false }, true);
+    setText(healthHint, "Could not read session storage");
+  }
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.browserListenerSessionData || changes.browserListenerActiveSessionId) {
+    void refresh();
+  }
+});
 
 void refresh();
 setInterval(() => void refresh(), 2000);

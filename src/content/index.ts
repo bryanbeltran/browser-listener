@@ -1,8 +1,6 @@
 import { installConsoleCapture } from "./console-capture.js";
-import { installUserActionCapture } from "./user-actions.js";
-import { installNavigationCapture } from "./navigation.js";
 import { captureDomSnapshot, collectDiagnostics } from "./diagnostics.js";
-import type { ConsoleEntry, UserAction } from "../shared/types.js";
+import type { ConsoleEntry } from "../shared/types.js";
 import type { DiagnosticsBundle, DomSnapshot } from "../shared/types.js";
 
 const Msg = {
@@ -16,7 +14,7 @@ const SYNC_POLL_MS = 2000;
 type Uninstall = () => void;
 const uninstalls: Uninstall[] = [];
 let activeSessionId: string | null = null;
-let activeDebuggerConsole = false;
+let activeConsoleCapture = false;
 let diagInterval: ReturnType<typeof setInterval> | null = null;
 
 function send(type: string, payload: object): void {
@@ -25,10 +23,6 @@ function send(type: string, payload: object): void {
 
 function sendConsole(entry: ConsoleEntry): void {
   send(Msg.RECORD_EVENT, { eventKind: "console", entry });
-}
-
-function sendUserAction(action: UserAction): void {
-  send(Msg.RECORD_EVENT, { eventKind: "user", action });
 }
 
 function sendDiagnostics(bundle: DiagnosticsBundle): void {
@@ -45,20 +39,17 @@ function stopCapture(): void {
   if (diagInterval) clearInterval(diagInterval);
   diagInterval = null;
   activeSessionId = null;
-  activeDebuggerConsole = false;
+  activeConsoleCapture = false;
 }
 
-function startCapture(sessionId: string, debuggerConsole: boolean): void {
+function startCapture(sessionId: string, consoleCapture: boolean): void {
   stopCapture();
   activeSessionId = sessionId;
-  activeDebuggerConsole = debuggerConsole;
+  activeConsoleCapture = consoleCapture;
 
-  // Console: content script only when CDP debugger is not capturing Runtime.console*
-  if (!debuggerConsole) {
+  if (consoleCapture) {
     uninstalls.push(installConsoleCapture(sessionId, sendConsole));
   }
-  uninstalls.push(installUserActionCapture(sessionId, sendUserAction));
-  uninstalls.push(installNavigationCapture(sessionId, sendUserAction));
   sendDiagnostics(collectDiagnostics());
   sendDomSnapshot(captureDomSnapshot(sessionId));
   diagInterval = setInterval(() => {
@@ -69,23 +60,32 @@ function startCapture(sessionId: string, debuggerConsole: boolean): void {
 function applyCaptureState(
   active: boolean,
   sessionId: string | null,
-  debuggerConsole: boolean,
+  consoleCapture: boolean,
 ): void {
   if (!active || !sessionId) {
     stopCapture();
     return;
   }
-  if (activeSessionId === sessionId && activeDebuggerConsole === debuggerConsole) return;
-  startCapture(sessionId, debuggerConsole);
+  if (activeSessionId === sessionId && activeConsoleCapture === consoleCapture) return;
+  startCapture(sessionId, consoleCapture);
 }
 
 async function syncFromBackground(): Promise<void> {
   const res = (await chrome.runtime.sendMessage({ type: Msg.GET_STATE })) as
-    | { session?: { id: string; active: boolean; health?: { debuggerAttached?: boolean } } }
+    | {
+        session?: {
+          id: string;
+          active: boolean;
+          options?: { consoleCapture?: boolean };
+          health?: { debuggerAttached?: boolean };
+        };
+      }
     | undefined;
   const session = res?.session;
   if (session?.active) {
-    applyCaptureState(true, session.id, session.health?.debuggerAttached ?? false);
+    const fromCdp = session.health?.debuggerAttached ?? false;
+    const enabled = Boolean(session.options?.consoleCapture);
+    applyCaptureState(true, session.id, enabled && !fromCdp);
   } else {
     applyCaptureState(false, null, false);
   }
@@ -93,10 +93,12 @@ async function syncFromBackground(): Promise<void> {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === Msg.CAPTURE_STATE_CHANGED) {
+    const fromCdp = Boolean(message.debuggerConsole);
+    const enabled = Boolean(message.consoleCapture);
     applyCaptureState(
       Boolean(message.active),
       (message.sessionId as string | null) ?? null,
-      Boolean(message.debuggerConsole),
+      enabled && !fromCdp,
     );
   }
 });

@@ -4,6 +4,10 @@ export interface CaptureOptions {
   screenRecording: boolean;
   tabAudio: boolean;
   staticAssetBodies: boolean;
+  /** CDP capture of GraphQL/ajax API request+response bodies (scoped URLs, size-capped). */
+  graphqlBodies: boolean;
+  /** Capture console + exceptions via CDP/content script. Off by default (noisy on large sites). */
+  consoleCapture: boolean;
   enricherIds: string[];
 }
 
@@ -11,8 +15,73 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   screenRecording: false,
   tabAudio: false,
   staticAssetBodies: false,
-  enricherIds: [],
+  graphqlBodies: true,
+  consoleCapture: false,
+  enricherIds: ["facebook-groups"],
 };
+
+export interface FacebookGroupSummary {
+  id: string;
+  name?: string;
+  url?: string;
+}
+
+export interface FacebookPerson {
+  id: string;
+  name: string;
+  url?: string;
+  source: string;
+}
+
+export interface FacebookPost {
+  id: string;
+  /** Numeric post id when known (from feedback decode or permalink). */
+  postId?: string;
+  feedbackId?: string;
+  text?: string;
+  authorId?: string;
+  authorName?: string;
+  createdAt?: number;
+  url?: string;
+  source: string;
+  /** Extracted from truncated / non-JSON GraphQL line. */
+  partialParse?: boolean;
+}
+
+export interface FacebookComment {
+  id: string;
+  text?: string;
+  authorId?: string;
+  authorName?: string;
+  createdAt?: number;
+  postId?: string;
+  source: string;
+}
+
+export interface FacebookReaction {
+  feedbackId?: string;
+  /** Post id linked via decoded feedback id. */
+  postId?: string;
+  userId: string;
+  userName: string;
+  reactionCount?: number;
+  source: string;
+}
+
+export interface FacebookGroupActivity {
+  groups: FacebookGroupSummary[];
+  people: FacebookPerson[];
+  posts: FacebookPost[];
+  comments: FacebookComment[];
+  reactions: FacebookReaction[];
+  graphqlQueryHints: { docId: string; friendlyName?: string; count: number }[];
+  sessionPermalink?: string;
+  parseWarnings?: string[];
+}
+
+export interface SessionEnrichments {
+  facebookGroups?: FacebookGroupActivity;
+}
 
 export interface StorageTruncation {
   console: number;
@@ -32,6 +101,12 @@ export interface SessionHealth {
   eventCounts: Record<string, number>;
   /** Count of entries dropped due to storage caps */
   truncation: StorageTruncation;
+  /** Total bytes stored for API body capture this session */
+  apiBodyBytesStored?: number;
+  /** Responses whose bodies were skipped due to session byte cap */
+  apiBodiesSkippedSessionCap?: number;
+  /** Individual request/response bodies truncated to per-response cap */
+  apiBodiesPerResponseTruncated?: number;
 }
 
 export interface HealthGap {
@@ -97,7 +172,12 @@ export interface NetworkEntry {
   fromCache?: boolean;
   error?: string;
   timing?: { start: number; end?: number; durationMs?: number };
-  /** Only when staticAssetBodies opt-in and CDP body captured */
+  /** Redacted request body when graphqlBodies opt-in and URL matches */
+  requestBody?: string;
+  responseBody?: string;
+  requestBodyTruncated?: boolean;
+  responseBodyTruncated?: boolean;
+  contentType?: string;
   requestBodySize?: number;
   responseBodySize?: number;
   bodyCaptured?: boolean;
@@ -201,6 +281,8 @@ export interface SessionData {
   userActions: UserAction[];
   diagnostics: DiagnosticsBundle[];
   domSnapshots: DomSnapshot[];
+  /** Populated at export time by enrichers (not persisted during capture). */
+  enrichments?: SessionEnrichments;
 }
 
 export interface RedactionRule {

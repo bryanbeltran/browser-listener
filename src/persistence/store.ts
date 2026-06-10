@@ -31,10 +31,41 @@ export function emptySessionData(): SessionData {
   };
 }
 
+function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
+  const h = session.health ?? ({} as CaptureSession["health"]);
+  return {
+    debuggerAttached: h.debuggerAttached ?? false,
+    debuggerDetachCount: h.debuggerDetachCount ?? 0,
+    serviceWorkerRestarts: h.serviceWorkerRestarts ?? 0,
+    partialGaps: h.partialGaps ?? [],
+    persistenceErrors: h.persistenceErrors ?? [],
+    eventCounts: h.eventCounts ?? {},
+    truncation: h.truncation ?? emptyTruncation(),
+    apiBodyBytesStored: h.apiBodyBytesStored,
+    apiBodiesSkippedSessionCap: h.apiBodiesSkippedSessionCap,
+    apiBodiesPerResponseTruncated: h.apiBodiesPerResponseTruncated,
+  };
+}
+
+function normalizeSessionData(data: SessionData): SessionData {
+  if (!data.session) return data;
+  return { ...data, session: { ...data.session, health: normalizeHealth(data.session) } };
+}
+
 export async function readSessionData(): Promise<SessionData> {
   const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
-  const data = (raw[STORAGE_KEY] as SessionData | undefined) ?? emptySessionData();
-  return data;
+  let data = (raw[STORAGE_KEY] as SessionData | undefined) ?? emptySessionData();
+  const activeId = (raw[ACTIVE_FLAG] as string | null) ?? null;
+  if (data.session) {
+    data = {
+      ...data,
+      session: {
+        ...data.session,
+        active: Boolean(activeId && data.session.id === activeId),
+      },
+    };
+  }
+  return normalizeSessionData(data);
 }
 
 export async function writeSessionData(data: SessionData): Promise<void> {

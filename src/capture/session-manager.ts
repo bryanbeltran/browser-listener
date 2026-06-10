@@ -59,12 +59,19 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
     stoppedAt: Date.now(),
     tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
   };
+  await recordTimeline(data.session.id, "system", "session_stop", "Capture stopped");
   await setSession(stopped);
-  await recordTimeline(stopped.id, "system", "session_stop", "Capture stopped");
   return stopped;
 }
 
 export async function getActiveSession(): Promise<CaptureSession | null> {
   const data = await readSessionData();
   return data.session?.active ? data.session : null;
+}
+
+export async function updateSessionTabUrl(tabUrl: string): Promise<void> {
+  await withSession((data) => {
+    if (!data.session?.active || data.session.tabUrl === tabUrl) return data;
+    return { ...data, session: { ...data.session, tabUrl } };
+  });
 }

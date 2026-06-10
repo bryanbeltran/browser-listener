@@ -8,6 +8,20 @@ body {
   margin: 0;
   padding: 12px;
   width: 320px;
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #1e1e1e;
+    color: #f0f0f0;
+  }
+
+  button {
+    background: #2a2a2a;
+    color: #f0f0f0;
+  }
 }
 
 h1 {
@@ -25,7 +39,7 @@ h1 {
   display: none;
 }
 
-.consent-text {
+.intro-text {
   font-size: 0.85rem;
   line-height: 1.4;
 }
@@ -74,6 +88,10 @@ button.secondary {
 
 .status.active {
   color: #0a7;
+}
+
+.stop-hint {
+  margin: 6px 0 0;
 }
 
 .hint {

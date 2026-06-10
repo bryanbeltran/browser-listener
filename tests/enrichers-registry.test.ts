@@ -3,8 +3,8 @@ import { applyEnrichers, listEnrichers, registerEnricher } from "../src/enricher
 import { leakySessionData } from "./helpers/fixtures.js";
 
 describe("enrichers registry", () => {
-  it("core export works with empty registry", async () => {
-    expect(listEnrichers()).toEqual([]);
+  it("registers facebook-groups enricher by default", async () => {
+    expect(listEnrichers().some((e) => e.id === "facebook-groups")).toBe(true);
     const out = await applyEnrichers(leakySessionData());
     expect(out.session?.id).toBe("test-session-1");
   });

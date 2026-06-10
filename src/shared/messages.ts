@@ -16,8 +16,14 @@ export interface PopupStateResponse {
   counts: {
     console: number;
     network: number;
-    userActions: number;
     timeline: number;
   };
   canExport: boolean;
+}
+
+export interface ExportZipResponse {
+  ok: boolean;
+  error?: string;
+  zipBase64?: string;
+  filename?: string;
 }

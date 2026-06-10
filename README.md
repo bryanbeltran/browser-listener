@@ -1,5 +1,7 @@
 # Browser Listener
 
+[![CI](https://github.com/bryanbeltran/browser-listener/actions/workflows/ci.yml/badge.svg)](https://github.com/bryanbeltran/browser-listener/actions/workflows/ci.yml)
+
 Privacy-first Chrome Extension (Manifest V3) that records a **user-started** browser session and exports a **local ZIP** with structured traces, diagnostics, and a standalone offline investigation report.
 
 - No capture before explicit consent
@@ -19,12 +21,40 @@ Privacy-first Chrome Extension (Manifest V3) that records a **user-started** bro
 
 ```bash
 npm install
-npm run build
-npm run typecheck
-npm test
+npm run verify   # lint + typecheck + test + build
 ```
 
-Load unpacked: **chrome://extensions** → Developer mode → **Load unpacked** → `dist/`
+Or individually: `npm run build`, `npm run typecheck`, `npm test`, `npm run lint`
+
+**Architecture:** [docs/architecture.md](docs/architecture.md)  
+**Sample export (synthetic):** [tests/fixtures/sample-export/](tests/fixtures/sample-export/)
+
+### Version bump + rebuild on commit
+
+Each commit auto-bumps the **patch** version (`0.3.0` → `0.3.1`), rebuilds `dist/`, and includes `package.json` + `manifest.json` in that commit.
+
+**One-time setup:**
+
+```bash
+npm run setup:hooks
+```
+
+Then reload the extension in **chrome://extensions** after commits (version number confirms you have the latest build).
+
+Skip once: `SKIP_VERSION_BUMP=1 git commit ...`  
+Manual bump + build: `npm run bump:build`
+
+### Load in Chrome (important)
+
+1. `npm run build`
+2. **chrome://extensions** → enable **Developer mode**
+3. **Load unpacked** → select the **`dist/`** folder (not `src/`, not the repo root)
+
+```
+~/repos/browser-listener/dist
+```
+
+If you see *"Manifest file is missing or unreadable"*, you picked the wrong folder — it must be **`dist/`** after a successful build.
 
 Reload the target tab after install. Click the extension icon, check consent, **Start capture**, then **Stop and export ZIP**.
 
@@ -38,14 +68,13 @@ Reload the target tab after install. Click the extension icon, check consent, **
 
 | File | Description |
 |------|-------------|
-| `report.html` | Offline investigation report (network + console explorers, cURL copy, repro recipe) |
+| `report.html` | Offline investigation report (network + console explorers, cURL copy) |
 | `trace-summary.json` | Compact session summary and counts |
 | `network.har` | HAR 1.2 (metadata; bodies empty unless advanced opt-in added later) |
 | `timeline.json` | Raw event timeline |
 | `console.json` | Console, warnings, exceptions |
 | `diagnostics.json` | Frames, route, performance, DOM snapshot refs |
 | `export-manifest.json` | Artifact list, privacy flags, capture health |
-| `repro-recipe.txt` | Copyable steps from user actions |
 
 Optional paths (`artifacts/screen.webm`, audio, static bodies) appear in manifest only when enabled.
 

@@ -1,28 +1,23 @@
 import { MessageType } from "../shared/messages.js";
-import {
-  createSession,
-  getActiveSession,
-  stopSession,
-} from "../capture/session-manager.js";
+import { createSession, getActiveSession } from "../capture/session-manager.js";
 import {
   attachDebugger,
-  detachDebugger,
   ensureDebuggerForSession,
   getAttachedTabId,
   registerDebuggerCapture,
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
-import { recordTimeline } from "../capture/timeline.js";
+import { stopCaptureAndPrepareZip } from "../capture/stop-export.js";
+import { prepareZipExport } from "../export/orchestrator.js";
+import { uint8ToBase64 } from "../shared/bytes.js";
 import {
   appendConsole,
   appendDiagnostics,
   appendDomSnapshot,
-  appendUserAction,
   clearSessionData,
   readSessionData,
 } from "../persistence/store.js";
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
-import { downloadZipExport } from "../export/orchestrator.js";
 import { broadcastCaptureState } from "./broadcast.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
@@ -30,10 +25,8 @@ import {
   enrichConsoleEntry,
   enrichDiagnosticsBundle,
   enrichDomSnapshot,
-  enrichUserAction,
-  userActionTimelineSummary,
 } from "./sender-context.js";
-import type { CaptureOptions, ConsoleEntry, UserAction } from "../shared/types.js";
+import type { CaptureOptions, ConsoleEntry } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
 async function startWithConsent(
@@ -41,7 +34,8 @@ async function startWithConsent(
   options: Partial<CaptureOptions> = {},
 ): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
-  const session = await createSession(tabId, tab.url, options);
+  const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
+  const session = await createSession(tabId, tab.url, merged);
   let debuggerAttached = false;
   try {
     await attachDebugger(tabId);
@@ -50,13 +44,6 @@ async function startWithConsent(
     /* webRequest fallback remains active */
   }
   await broadcastCaptureState(true, session.id, debuggerAttached);
-}
-
-async function stopAndExport(): Promise<void> {
-  await detachDebugger();
-  await stopSession();
-  await broadcastCaptureState(false, null, false);
-  await downloadZipExport();
 }
 
 registerDebuggerCapture();
@@ -94,14 +81,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const hasData =
           data.console.length > 0 ||
           data.network.length > 0 ||
-          data.userActions.length > 0 ||
-          data.timeline.length > 0;
+          data.timeline.length > 0 ||
+          Boolean(data.enrichments?.facebookGroups);
         return {
           session: data.session,
           counts: {
             console: data.console.length,
             network: data.network.length,
-            userActions: data.userActions.length,
             timeline: data.timeline.length,
           },
           canExport: !data.session?.active && hasData,
@@ -115,18 +101,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
         if (id == null) return { ok: false, error: "No active tab" };
         if (await getActiveSession()) return { ok: false, error: "Already capturing" };
-        await startWithConsent(id, { ...DEFAULT_CAPTURE_OPTIONS, ...opts });
+        await startWithConsent(id, opts);
         return { ok: true };
       }
-      case MessageType.STOP_AND_EXPORT:
-        await stopAndExport();
-        return { ok: true };
-      case MessageType.EXPORT_CAPTURE:
+      case MessageType.STOP_AND_EXPORT: {
+        const bundle = await stopCaptureAndPrepareZip();
+        if (!bundle) return { ok: false, error: "Nothing to export" };
+        return {
+          ok: true,
+          zipBase64: uint8ToBase64(bundle.zip),
+          filename: bundle.filename,
+        };
+      }
+      case MessageType.EXPORT_CAPTURE: {
         if (await getActiveSession()) {
           return { ok: false, error: "Stop capture before export" };
         }
-        await downloadZipExport();
-        return { ok: true };
+        const bundle = await prepareZipExport();
+        return {
+          ok: true,
+          zipBase64: uint8ToBase64(bundle.zip),
+          filename: bundle.filename,
+        };
+      }
       case MessageType.DISCARD_CAPTURE:
         if (await getActiveSession()) {
           return { ok: false, error: "Stop capture first" };
@@ -138,20 +135,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!session) return { ok: false, reason: "inactive" };
         const kind = message.eventKind as string;
         if (kind === "console") {
+          if (!session.options.consoleCapture) return { ok: true, skipped: "console_disabled" };
           const entry = enrichConsoleEntry(message.entry as ConsoleEntry, sender);
           if (entry.sessionId !== session.id) return { ok: false };
           if (entry.source === "content" && session.health.debuggerAttached) {
             return { ok: true, skipped: "debugger_console_active" };
           }
           await appendConsole(entry);
-        } else if (kind === "user") {
-          const action = enrichUserAction(message.action as UserAction, sender);
-          await appendUserAction(action);
-          await recordTimeline(session.id, "user", action.type, userActionTimelineSummary(action), {
-            frameId: action.frameId,
-            tabId: action.tabId,
-            payloadRef: action.id,
-          });
         } else if (kind === "diagnostics") {
           await appendDiagnostics(enrichDiagnosticsBundle(message.bundle, sender));
         } else if (kind === "dom") {

@@ -16,7 +16,13 @@ export function buildHar(entries: NetworkEntry[], pageUrl: string): object {
         queryString: [],
         cookies: [],
         headersSize: -1,
-        bodySize: n.requestBodySize ?? 0,
+        bodySize: n.requestBodySize ?? (n.requestBody ? n.requestBody.length : 0),
+        postData: n.requestBody
+          ? {
+              mimeType: "application/json",
+              text: n.requestBody,
+            }
+          : undefined,
       },
       response: {
         status: n.statusCode ?? 0,
@@ -25,9 +31,13 @@ export function buildHar(entries: NetworkEntry[], pageUrl: string): object {
         headers: headerPairs(redactHeaders(n.responseHeaders)),
         cookies: [],
         content: {
-          size: n.responseBodySize ?? 0,
-          mimeType: n.responseHeaders?.["content-type"] ?? "",
-          text: n.bodyCaptured ? "[body redacted or captured per policy]" : "",
+          size: n.responseBodySize ?? (n.responseBody ? n.responseBody.length : 0),
+          mimeType:
+            n.contentType ??
+            n.responseHeaders?.["content-type"] ??
+            n.responseHeaders?.["Content-Type"] ??
+            "",
+          text: n.responseBody ?? "",
         },
         redirectURL: "",
         headersSize: -1,
