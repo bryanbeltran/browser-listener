@@ -1,5 +1,5 @@
 import { MessageType } from "../shared/messages.js";
-import { createSession, getActiveSession } from "../capture/session-manager.js";
+import { createSession, getActiveSession, stopSession } from "../capture/session-manager.js";
 import {
   attachDebugger,
   ensureDebuggerForSession,
@@ -28,7 +28,12 @@ async function startWithConsent(
   const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
   await createSession(tabId, tab.url, merged);
   resetReactionHydrationScheduler();
-  await attachDebugger(tabId);
+  try {
+    await attachDebugger(tabId);
+  } catch (err) {
+    await stopSession();
+    throw err;
+  }
 }
 
 registerDebuggerCapture();

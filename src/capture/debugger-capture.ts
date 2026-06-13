@@ -34,6 +34,7 @@ async function recordAttachFailure(tabId: number, chromeAttached: boolean, messa
     await detachChromeDebugger(tabId);
   }
   attachedTabId = null;
+  const reason = `debugger_attach_failed: ${message}`;
   await patchSession((session) => {
     if (!session) return session;
     return {
@@ -41,10 +42,27 @@ async function recordAttachFailure(tabId: number, chromeAttached: boolean, messa
       health: {
         ...session.health,
         debuggerAttached: false,
+        lastAttachError: message,
         partialGaps: [
           ...session.health.partialGaps,
-          { at: Date.now(), reason: `debugger_attach_failed: ${message}` },
+          { at: Date.now(), reason },
         ],
+      },
+    };
+  });
+}
+
+async function syncDebuggerHealthIfAttached(): Promise<void> {
+  if (attachedTabId == null) return;
+  await patchSession((session) => {
+    if (!session?.active || session.health.debuggerAttached) return session;
+    return {
+      ...session,
+      health: {
+        ...session.health,
+        debuggerAttached: true,
+        debuggerEverAttached: true,
+        lastAttachError: undefined,
       },
     };
   });
@@ -205,7 +223,10 @@ export function registerDebuggerCapture(): void {
 export async function ensureDebuggerForSession(): Promise<void> {
   const tabId = await sessionTab();
   if (tabId == null) return;
-  if (attachedTabId === tabId) return;
+  if (attachedTabId === tabId) {
+    await syncDebuggerHealthIfAttached();
+    return;
+  }
   await attachDebugger(tabId);
 }
 
@@ -234,11 +255,26 @@ export async function snapshotDebuggerHealthForExport(): Promise<void> {
   await patchSession((session) => {
     if (!session) return session;
     const attached = session.health.debuggerAttached || tabId != null;
-    if (!attached && !session.health.debuggerEverAttached) return session;
+    const everAttached = Boolean(session.health.debuggerEverAttached || attached);
+    const gaps = [...session.health.partialGaps];
+    if (!everAttached) {
+      const detail =
+        session.health.lastAttachError ??
+        gaps.find((g) => g.reason.startsWith("debugger_attach_failed"))?.reason ??
+        "CDP attach never completed";
+      const reason = `capture_without_debugger: ${detail}`;
+      if (!gaps.some((g) => g.reason.startsWith("capture_without_debugger"))) {
+        gaps.push({ at: Date.now(), reason });
+      }
+    }
+    if (!everAttached) {
+      return { ...session, health: { ...session.health, partialGaps: gaps } };
+    }
     return {
       ...session,
       health: {
         ...session.health,
+        partialGaps: gaps,
         debuggerAttached: attached,
         debuggerEverAttached: true,
       },

@@ -69,6 +69,7 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
     serviceWorkerRestarts: h.serviceWorkerRestarts ?? 0,
     partialGaps: h.partialGaps ?? [],
     persistenceErrors: h.persistenceErrors ?? [],
+    lastAttachError: h.lastAttachError,
     truncation: h.truncation ?? emptyTruncation(),
     apiBodyBytesStored: h.apiBodyBytesStored,
     apiBodiesSkippedSessionCap: h.apiBodiesSkippedSessionCap,

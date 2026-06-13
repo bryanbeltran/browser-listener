@@ -65,9 +65,19 @@ describe("attachDebugger", () => {
 
     const data = await readSessionData();
     expect(data.session?.health.debuggerAttached).toBe(false);
+    expect(data.session?.health.lastAttachError).toBe("Network.enable failed");
     expect(
       data.session?.health.partialGaps.some((g) =>
         g.reason.startsWith("debugger_attach_failed: Network.enable failed"),
+      ),
+    ).toBe(true);
+
+    const { snapshotDebuggerHealthForExport } = await import("../src/capture/debugger-capture.js");
+    await snapshotDebuggerHealthForExport();
+    const exported = await readSessionData();
+    expect(
+      exported.session?.health.partialGaps.some((g) =>
+        g.reason.startsWith("capture_without_debugger:"),
       ),
     ).toBe(true);
   });

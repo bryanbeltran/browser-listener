@@ -30,6 +30,7 @@ export function buildPopupStateSnapshot(
             debuggerEverAttached: session.health.debuggerEverAttached ?? false,
             partialGaps: session.health.partialGaps ?? [],
             truncation: session.health.truncation ?? emptyTruncation(),
+            lastAttachError: session.health.lastAttachError,
           },
         }
       : null,

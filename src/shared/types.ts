@@ -174,6 +174,8 @@ export interface SessionHealth {
   serviceWorkerRestarts: number;
   partialGaps: HealthGap[];
   persistenceErrors: string[];
+  /** Last chrome.debugger.attach / Network.enable failure, if any. */
+  lastAttachError?: string;
   truncation: StorageTruncation;
   apiBodyBytesStored?: number;
   apiBodiesSkippedSessionCap?: number;
@@ -206,7 +208,10 @@ export interface PopupSessionView {
   startedAt: number;
   stoppedAt?: number;
   tabClosedDuringCapture?: boolean;
-  health: Pick<SessionHealth, "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation">;
+  health: Pick<
+    SessionHealth,
+    "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation" | "lastAttachError"
+  >;
 }
 
 export interface PopupStateSnapshot {

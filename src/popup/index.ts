@@ -39,6 +39,23 @@ function truncationHint(session: PopupStateResponse["session"]): string {
   return `Truncated: network −${t.network}`;
 }
 
+function debuggerHealthHint(session: PopupStateResponse["session"]): string {
+  if (!session) return "";
+  const dbg = session.health?.debuggerAttached ?? false;
+  const gaps = session.health?.partialGaps ?? [];
+  const attachErr = session.health?.lastAttachError;
+  const attachGap = gaps.find((g) => g.reason.startsWith("debugger_attach_failed"));
+  if (dbg) return "Debugger attached — GraphQL body capture active";
+  if (attachErr) return `Attach failed: ${attachErr}`;
+  if (attachGap) {
+    return attachGap.reason.replace(/^debugger_attach_failed:\s*/, "Attach failed: ");
+  }
+  if (gaps.length) {
+    return `Health: ${gaps.length} gap(s) logged; metadata-only fallback`;
+  }
+  return "Debugger not attached — metadata-only fallback";
+}
+
 function formatEntityCounts(counts: ExportEntityCounts): string {
   return `${counts.posts} posts · ${counts.comments} comments · ${counts.reactions} reactions`;
 }
@@ -91,18 +108,8 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
 
   if (active && state.session) {
     setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
-    const gaps = state.session.health?.partialGaps?.length ?? 0;
-    const dbg = state.session.health?.debuggerAttached ?? false;
     const trunc = truncationHint(state.session);
-    setText(
-      healthHint,
-      trunc ||
-        (gaps
-          ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (metadata-only fallback)"}`
-          : dbg
-            ? "Debugger attached — GraphQL body capture active"
-            : "Debugger not attached — metadata-only fallback"),
-    );
+    setText(healthHint, trunc || debuggerHealthHint(state.session));
   }
 
   if (canExport && state.session) {
@@ -123,7 +130,6 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   }
 
   if (btnStart) btnStart.disabled = active;
-  if (active) showStartError("");
 }
 
 async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
@@ -137,8 +143,10 @@ btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
   showStartError("");
   try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) throw new Error("No active tab — open Facebook first");
     const res = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
-      { type: MessageType.CONSENT_AND_START },
+      { type: MessageType.CONSENT_AND_START, tabId: tab.id },
       30_000,
     );
     if (!res?.ok) throw new Error(res.error ?? "Could not start capture");
