@@ -23,7 +23,6 @@ const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const btnStop = el<HTMLButtonElement>("btn-stop");
-const btnExport = el<HTMLButtonElement>("btn-export");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
 const healthHint = el("health-hint");
@@ -159,23 +158,6 @@ async function requestStopAndExport(): Promise<void> {
 }
 
 btnStop?.addEventListener("click", () => void requestStopAndExport());
-
-btnExport?.addEventListener("click", async () => {
-  btnExport.disabled = true;
-  setText(exportHint, "Preparing ZIP…");
-  try {
-    const res = await sendMessageWithTimeout<ExportZipResponse>(
-      { type: MessageType.EXPORT_CAPTURE },
-      180_000,
-    );
-    await downloadFromResponse(res);
-    applyExportResult(res);
-  } catch (err) {
-    setText(exportHint, err instanceof Error ? err.message : "Export failed");
-  } finally {
-    btnExport.disabled = false;
-  }
-});
 
 btnNewSession?.addEventListener("click", async () => {
   lastExportCounts = undefined;

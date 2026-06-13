@@ -7,7 +7,6 @@ import {
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
 import { stopCaptureAndPrepareZip } from "../capture/stop-export.js";
-import { prepareZipExport } from "../export/orchestrator.js";
 import { uint8ToBase64 } from "../shared/bytes.js";
 import {
   clearSessionData,
@@ -86,18 +85,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case MessageType.STOP_AND_EXPORT: {
         const bundle = await stopCaptureAndPrepareZip();
         if (!bundle) return { ok: false, error: "Nothing to export" };
-        return {
-          ok: true,
-          zipBase64: uint8ToBase64(bundle.zip),
-          filename: bundle.filename,
-          counts: bundle.counts,
-        };
-      }
-      case MessageType.EXPORT_CAPTURE: {
-        if (await getActiveSession()) {
-          return { ok: false, error: "Stop capture before export" };
-        }
-        const bundle = await prepareZipExport();
         return {
           ok: true,
           zipBase64: uint8ToBase64(bundle.zip),
