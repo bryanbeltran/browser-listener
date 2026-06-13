@@ -4,6 +4,7 @@ import {
   getCachedGraphqlTemplate,
   getHydrationActivity,
 } from "./hydration-index.js";
+import { invalidateHydrationSnapshot } from "./hydration-snapshot.js";
 import {
   ALL_REACTION_TYPE_IDS,
   isDialogReactionSource,
