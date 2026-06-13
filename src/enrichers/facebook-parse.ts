@@ -216,6 +216,13 @@ export const KNOWN_REACTION_NAMES: Readonly<Record<string, string>> = {
   "814576161897161": "Angry",
 };
 
+/** Like, Love, and Haha — sampled when hydrating reactions before export. */
+export const SAMPLE_REACTION_TYPE_IDS: Readonly<Record<string, string>> = {
+  Like: KNOWN_REACTION_NAMES["1635855486666999"],
+  Love: KNOWN_REACTION_NAMES["1678524932434102"],
+  Haha: KNOWN_REACTION_NAMES["115940658764963"],
+};
+
 export function reactionTypeFromId(
   reactionId: string | undefined,
   reactionNames: ReadonlyMap<string, string>,

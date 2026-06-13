@@ -2,6 +2,7 @@ import { readSessionData, upsertNetwork } from "../persistence/store.js";
 import { updateDebuggerHealth } from "../persistence/session-recovery.js";
 import { recordHealthGap } from "../persistence/store.js";
 import { captureApiBodiesForRequest, shouldCaptureApiBody } from "./api-body-capture.js";
+import { onCaptureGraphqlActivity } from "./reaction-hydration.js";
 import { getActiveSession } from "./session-manager.js";
 import type { NetworkEntry } from "../shared/types.js";
 
@@ -116,6 +117,9 @@ async function onDebuggerEvent(
       const updated: NetworkEntry = { ...base, ...bodies };
       pendingCdp.set(requestId, updated);
       await upsertNetwork(updated);
+      if (session.options.reactionHydration) {
+        onCaptureGraphqlActivity(tabId, updated.requestBody);
+      }
     })();
     pendingBodyCaptures.add(job);
     void job.finally(() => pendingBodyCaptures.delete(job));

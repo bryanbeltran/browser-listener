@@ -1,10 +1,13 @@
 export interface CaptureOptions {
   /** CDP capture of GraphQL request+response bodies on facebook.com. */
   graphqlBodies: boolean;
+  /** During capture, slowly sample Like/Love/Haha reactors for engaged posts. */
+  reactionHydration: boolean;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   graphqlBodies: true,
+  reactionHydration: true,
 };
 
 /** Where a post was encountered while browsing. */

@@ -6,6 +6,7 @@ import {
   registerDebuggerCapture,
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
+import { registerReactionHydrationListeners, resetReactionHydrationScheduler } from "../capture/reaction-hydration.js";
 import { stopCaptureAndPrepareZip } from "../capture/stop-export.js";
 import { uint8ToBase64 } from "../shared/bytes.js";
 import {
@@ -25,6 +26,7 @@ async function startWithConsent(
   const tab = await chrome.tabs.get(tabId);
   const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
   await createSession(tabId, tab.url, merged);
+  resetReactionHydrationScheduler();
   try {
     await attachDebugger(tabId);
   } catch {
@@ -35,6 +37,7 @@ async function startWithConsent(
 registerDebuggerCapture();
 registerWebRequestCapture();
 registerTabLifecycle();
+registerReactionHydrationListeners();
 
 chrome.runtime.onInstalled.addListener(() => {
   void recoverSession();
@@ -97,6 +100,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return { ok: false, error: "Stop capture first" };
         }
         await clearSessionData();
+        resetReactionHydrationScheduler();
         return { ok: true };
       default:
         return { ok: false };

@@ -1,4 +1,5 @@
 import type { ArtifactManifestEntry, ExportManifest, SessionData } from "../shared/types.js";
+import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
 export function buildExportManifest(
   data: SessionData,
@@ -9,7 +10,7 @@ export function buildExportManifest(
     sessionId: data.session?.id ?? "none",
     exportedAt: Date.now(),
     privacy: { localOnly: true, remoteUpload: false },
-    options: data.session?.options ?? { graphqlBodies: true },
+    options: data.session?.options ?? DEFAULT_CAPTURE_OPTIONS,
     files,
     health: data.session?.health ?? {
       debuggerAttached: false,
