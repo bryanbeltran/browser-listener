@@ -1,19 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Browser Listener",
-  "version": "0.3.5",
-  "description": "Privacy-first local browser session recorder with ZIP export and offline investigation report.",
+  "version": "0.3.6",
+  "description": "Collect and organize Facebook posts, comments, and reactions locally while you browse. Privacy-first ZIP export.",
   "permissions": [
     "storage",
     "downloads",
     "tabs",
     "webRequest",
     "debugger",
-    "webNavigation",
-    "pageCapture"
-  ],
-  "optional_permissions": [
-    "tabCapture"
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -25,18 +21,5 @@
   "action": {
     "default_popup": "popup.html",
     "default_title": "Browser Listener"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_start",
-      "type": "module",
-      "all_frames": true
-    }
-  ]
+  }
 }

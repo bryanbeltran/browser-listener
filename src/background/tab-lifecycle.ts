@@ -1,7 +1,6 @@
 import { detachDebugger } from "../capture/debugger-capture.js";
 import { getActiveSession, stopSession, updateSessionTabUrl } from "../capture/session-manager.js";
 import { recordHealthGap } from "../persistence/store.js";
-import { broadcastCaptureState } from "./broadcast.js";
 
 /**
  * When the captured tab closes mid-session: detach debugger, stop capture,
@@ -32,5 +31,4 @@ export async function handleTabClosed(tabId: number): Promise<void> {
   await recordHealthGap("tab_closed");
   await stopSession({ tabClosed: true });
   await detachDebugger();
-  await broadcastCaptureState(false, null, false);
 }

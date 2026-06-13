@@ -2,12 +2,16 @@
 
 [![CI](https://github.com/bryanbeltran/browser-listener/actions/workflows/ci.yml/badge.svg)](https://github.com/bryanbeltran/browser-listener/actions/workflows/ci.yml)
 
-Privacy-first Chrome Extension (Manifest V3) that records a **user-started** browser session and exports a **local ZIP** with structured traces, diagnostics, and a standalone offline investigation report.
+Privacy-first Chrome extension for **collecting and organizing Facebook data while you browse**. Start a session, scroll groups or your timeline, open posts, and export a local ZIP with structured posts, comments, reactions, and people — no upload, no telemetry.
 
-- No capture before explicit consent
-- No remote upload or telemetry
-- Redaction before persistence and export
-- Optional screen/audio/static-body capture **off by default** (stubs)
+- **Posts** — author, text, media, where found (group feed, timeline, profile/page)
+- **Comments** — text linked to parent post and author
+- **Reactions** — who reacted to posts (type when available: Like, Love, etc.)
+- **People** — authors and reactors encountered in the session
+
+Planned: reactions on comments, richer reaction types, and pro/anti cause tagging on posts, comments, and reactions.
+
+All capture is consent-gated, stored locally, and redacted before export. Optional screen/audio/static-body capture remains **off by default** (stubs).
 
 ## Stack
 
@@ -56,70 +60,73 @@ Manual bump + build: `npm run bump:build`
 
 If you see *"Manifest file is missing or unreadable"*, you picked the wrong folder — it must be **`dist/`** after a successful build.
 
-Reload the target tab after install. Click the extension icon, check consent, **Start capture**, then **Stop and export ZIP**.
+Reload the target tab after install. Open Facebook (group feed, timeline, or a post), click the extension icon, check consent, **Start capture**, browse normally, then **Stop and export ZIP**.
+
+## Facebook workflow
+
+1. **Start capture** on a Facebook tab (group, home feed, or permalink).
+2. **Browse** — scroll feeds, open post dialogs, expand comments, open reaction lists when you want full reactor names.
+3. **Stop and export** — ZIP includes `group-activity.json`, CSVs, `graphql-captures.json`, and an offline HTML report.
+
+### What we extract today
+
+| Entity | Fields |
+|--------|--------|
+| **Post** | text, author, URL, post id, group/timeline context, linked comments & post reactions |
+| **Comment** | text, author, parent post id (from GraphQL + CommentList fallback) |
+| **Reaction** | user, post id, reaction type when dialog captured |
+| **Group** | name, id, URL when seen in GraphQL |
+
+### Roadmap
+
+| Priority | Feature |
+|----------|---------|
+| Next | Comment reactions — who reacted to each comment |
+| Next | Reaction type on all reactors (not only reactions dialog) |
+| Later | Cause tagging — label posts/comments/reactions as pro/anti/neutral on chosen causes |
+| Later | Timeline vs group detection refinements, persistence across sessions |
+
+Tips for richer exports: open the full reactions dialog (not just hover tooltip), expand comment threads, and stay on the tab until stop.
 
 ## Core flow
 
-1. **Consent** — checkbox required; no recording until confirmed.
-2. **Start capture** — session on active tab; debugger attach (when allowed); content scripts in **all frames**.
-3. **Stop and export** — detach debugger, stop session, download ZIP locally.
+1. **Start capture** on a Facebook tab — debugger attaches for GraphQL network capture.
+2. **Browse** — scroll feeds, open posts, expand comments and reaction dialogs.
+3. **Stop and export** — detach debugger, parse GraphQL into structured data, download ZIP locally.
 
 ## ZIP contents
 
 | File | Description |
 |------|-------------|
-| `report.html` | Offline investigation report (network + console explorers, cURL copy) |
-| `trace-summary.json` | Compact session summary and counts |
-| `network.har` | HAR 1.2 (metadata; bodies empty unless advanced opt-in added later) |
-| `timeline.json` | Raw event timeline |
-| `console.json` | Console, warnings, exceptions |
-| `diagnostics.json` | Frames, route, performance, DOM snapshot refs |
+| `report.html` | Offline Facebook session report (posts, comments, reactions) |
+| `trace-summary.json` | Session duration and entity counts |
 | `export-manifest.json` | Artifact list, privacy flags, capture health |
-
-Optional paths (`artifacts/screen.webm`, audio, static bodies) appear in manifest only when enabled.
+| `group-activity.json` | Structured Facebook posts, comments, reactions, people |
+| `graphql-captures.json` | Raw Facebook `/api/graphql` bodies (parser debug archive) |
+| `csv/*.csv` | `posts.csv`, `comments.csv`, `reactions.csv`, `people.csv`, `members.csv` |
 
 ## Module layout
 
 ```
 src/
-  capture/        Session manager, debugger CDP, webRequest fallback
-  content/        Console, user actions, navigation, diagnostics (per-frame)
+  capture/        Session manager, debugger CDP, GraphQL body capture, webRequest fallback
   redaction/      Configurable rules + default-deny sensitive keys
   persistence/    Storage + MV3 service-worker recovery
-  export/         HAR, cURL, ZIP orchestration
-  report/         Standalone HTML generator
-  enrichers/      Pluggable post-processors (empty by default)
+  export/         ZIP orchestration, CSV, graphql-captures
+  report/         Facebook-focused HTML report
+  enrichers/      Facebook GraphQL parser (always on at export)
   background/     Service worker entry
-  popup/          Consent + capture UI
+  popup/          Start/stop + export UI
   shared/         Types and messages
 tests/            Vitest regression + E2E category registry
 ```
 
 ## Capture details
 
-### Full-tab
-
-- Content scripts: `all_frames: true` — top frame + embedded frames.
-- Cross-origin iframe internals follow Chrome isolation; CDP/debugger improves network/console across targets when attached.
-
 ### Network
 
-- Primary: CDP `Network.*` via debugger.
-- Fallback: `chrome.webRequest` metadata on the captured tab.
-- **No response-body capture by default** (privacy). Advanced static-body opt-in reserved for future CDP `getResponseBody` behind a flag.
-
-### Console / runtime
-
-- Content: wrapped `console.*`, `error`, `unhandledrejection`.
-- Debugger: `Runtime.consoleAPICalled`, `Runtime.exceptionThrown`.
-
-### User actions
-
-- Click, submit, input, change, `history` API, visibility.
-
-### Page diagnostics
-
-- Frame inventory, route state, DOM snapshots (truncated + redacted), performance resource counts.
+- Primary: CDP `Network.*` via debugger with GraphQL body capture on `facebook.com`.
+- Fallback: `chrome.webRequest` metadata when debugger is not attached.
 
 ## Privacy / redaction
 
@@ -129,7 +136,7 @@ Configure via `setRedactionConfig()` in `src/redaction/engine.ts` (runtime API f
 
 ## Enrichers
 
-Register optional enrichers in `src/enrichers/index.ts`. Enable per session via `CaptureOptions.enricherIds`. Keep branding and product-specific logic **out of core**.
+Facebook parsing runs automatically at export via `src/enrichers/facebook-groups.ts`. Register additional enrichers in `src/enrichers/index.ts` (e.g. future cause-tagging).
 
 ## Reliability
 
@@ -144,17 +151,16 @@ Register optional enrichers in `src/enrichers/index.ts`. Enable per session via 
 | `storage` | Local session persistence |
 | `downloads` | Local ZIP export only |
 | `tabs` | Active tab targeting |
-| `debugger` | CDP console/network/runtime (shows debugging banner) |
+| `debugger` | CDP network capture for GraphQL (shows debugging banner) |
 | `webRequest` | Metadata fallback |
-| `<all_urls>` host | Capture on user pages (narrow before store publish) |
-| `tabCapture` (optional) | Future screen/audio opt-in |
+| `webNavigation` | Track tab URL during capture |
+| `<all_urls>` host | Capture on Facebook tabs (narrow before store publish) |
 
 ## API limits
 
-- Response bodies not in HAR unless future opt-in + CDP body fetch.
+- GraphQL bodies only on `facebook.com` paths, size-capped per response and session.
 - Debugger banner visible while attached.
 - MV3 service worker may sleep; recovery paths documented above.
-- Screen/audio/static-body UI toggles disabled until implemented.
 
 ## Testing
 

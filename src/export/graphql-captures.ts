@@ -1,3 +1,4 @@
+import { redactDeep, redactString } from "../redaction/engine.js";
 import type { NetworkEntry } from "../shared/types.js";
 
 export interface GraphqlCaptureRecord {
@@ -32,6 +33,21 @@ function parseFormBody(body?: string): Record<string, string> {
   return out;
 }
 
+function redactFormBody(body?: string): string | undefined {
+  if (!body) return undefined;
+  const redacted = redactDeep(parseFormBody(body)) as Record<string, string>;
+  return new URLSearchParams(redacted).toString();
+}
+
+function redactResponseBody(body?: string): string | undefined {
+  if (!body) return undefined;
+  try {
+    return JSON.stringify(redactDeep(JSON.parse(body)));
+  } catch {
+    return redactString(body);
+  }
+}
+
 export function buildGraphqlCaptures(network: NetworkEntry[]): GraphqlCaptureRecord[] {
   const out: GraphqlCaptureRecord[] = [];
   for (const entry of network) {
@@ -44,8 +60,8 @@ export function buildGraphqlCaptures(network: NetworkEntry[]): GraphqlCaptureRec
       url: entry.url,
       docId: form.doc_id,
       friendlyName: form.fb_api_req_friendly_name,
-      requestBody: entry.requestBody,
-      responseBody: entry.responseBody,
+      requestBody: redactFormBody(entry.requestBody),
+      responseBody: redactResponseBody(entry.responseBody),
       statusCode: entry.statusCode,
       requestBodyTruncated: entry.requestBodyTruncated,
       responseBodyTruncated: entry.responseBodyTruncated,

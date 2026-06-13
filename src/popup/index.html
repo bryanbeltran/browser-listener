@@ -10,7 +10,7 @@
     <header>
       <div class="header-titles">
         <h1>Browser Listener</h1>
-        <p class="tagline">Privacy-first local session recorder</p>
+        <p class="tagline">Collect Facebook posts, comments &amp; reactions locally</p>
       </div>
       <span id="app-version" class="version-label" aria-label="Extension version"></span>
     </header>
@@ -21,26 +21,16 @@
 
     <section id="start-panel" class="panel hidden">
       <p class="intro-text">
-        Recording stays on this device. No upload, no telemetry. Sensitive headers, cookies,
-        tokens, and form values are redacted by default.
+        Organize Facebook posts, comments, and reactions as you browse. Everything stays on this
+        device — no upload, no telemetry. Sensitive headers, cookies, and tokens are redacted.
       </p>
-      <details class="advanced">
-        <summary>Advanced options</summary>
-        <label class="checkbox"><input type="checkbox" id="opt-screen" disabled /> Screen recording (coming soon)</label>
-        <label class="checkbox"><input type="checkbox" id="opt-audio" disabled /> Tab audio (coming soon)</label>
-        <label class="checkbox"><input type="checkbox" id="opt-bodies" disabled /> Static asset bodies (coming soon)</label>
-        <label class="checkbox"><input type="checkbox" id="opt-graphql-bodies" checked /> Capture API bodies (GraphQL)</label>
-        <label class="checkbox"><input type="checkbox" id="opt-console" /> Capture console logs</label>
-        <p class="hint">GraphQL bodies on by default (Facebook <code>/api/graphql</code> only). Console off by default.</p>
-      </details>
       <button type="button" id="btn-start" class="primary">Start capture</button>
     </section>
 
     <section id="active-panel" class="panel hidden">
       <p id="status" class="status active">Capturing…</p>
       <div class="counts">
-        <span>Network <strong id="c-network">0</strong></span>
-        <span>Timeline <strong id="c-timeline">0</strong></span>
+        <span>GraphQL requests <strong id="c-network">0</strong></span>
       </div>
       <p id="health-hint" class="hint"></p>
       <button type="button" id="btn-stop" class="primary">Stop &amp; download ZIP</button>
@@ -50,15 +40,15 @@
     <section id="export-panel" class="panel hidden">
       <p id="export-status" class="status">Capture ended</p>
       <div class="counts">
-        <span>Network <strong id="e-network">0</strong></span>
-        <span>Timeline <strong id="e-timeline">0</strong></span>
+        <span>GraphQL requests <strong id="e-network">0</strong></span>
       </div>
+      <p id="export-entities" class="export-entities hidden"></p>
       <p id="export-hint" class="hint"></p>
       <button type="button" id="btn-export" class="secondary">Download ZIP again</button>
       <button type="button" id="btn-new-session" class="primary">Start new capture</button>
     </section>
 
-    <p class="hint footer">Reload the target tab after install. Export is local ZIP only.</p>
+    <p class="hint footer">Open Facebook, start capture, browse, then stop to export.</p>
     <script type="module" src="./index.ts"></script>
   </body>
 </html>

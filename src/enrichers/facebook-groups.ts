@@ -1,23 +1,33 @@
 import {
   commentLegacyKey,
+  collectReactionNames,
   decodeCommentPostId,
-  decodeFeedbackPostId,
+  decodeFeedbackTarget,
   extractCommentsFromPartialJson,
+  extractMediaFromAttachments,
   extractStoryTextsFromPartialJson,
+  feedbackCounts,
+  groupMemberCountText,
   groupPermalinkUrl,
+  inferFacebookSurface,
   isDialogReactionSource,
   parseGraphqlLines,
   permalinkPostId,
   postIdFromFacebookUrl,
   preferCommentId,
+  reactionTypeFromId,
+  shareFromAttachedStory,
 } from "./facebook-parse.js";
 import type {
   FacebookComment,
   FacebookGroupActivity,
+  FacebookGroupMember,
   FacebookGroupSummary,
+  FacebookMediaAttachment,
   FacebookPerson,
   FacebookPost,
   FacebookReaction,
+  FacebookShareInfo,
   NetworkEntry,
 } from "../shared/types.js";
 import type { SessionEnricher } from "./types.js";
@@ -74,27 +84,45 @@ function messageText(message: unknown): string | undefined {
   return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
-function readCaption(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const caption = (value as { accessibility_caption?: unknown }).accessibility_caption;
-  return typeof caption === "string" && caption.trim() ? caption.trim() : undefined;
+function attachmentCaption(attachments: unknown): string | undefined {
+  const media = extractMediaFromAttachments(attachments);
+  return media.find((m) => m.caption)?.caption;
 }
 
-function attachmentCaption(attachments: unknown): string | undefined {
-  if (!Array.isArray(attachments)) return undefined;
-  for (const item of attachments) {
-    if (!item || typeof item !== "object") continue;
-    const renderer = (item as Record<string, unknown>).style_type_renderer;
-    if (!renderer || typeof renderer !== "object") continue;
-    const attachment = (renderer as Record<string, unknown>).attachment;
-    if (!attachment || typeof attachment !== "object") continue;
-    const fromAttachment = readCaption(attachment);
-    if (fromAttachment) return fromAttachment;
-    const media = (attachment as { media?: unknown }).media;
-    const fromMedia = readCaption(media);
-    if (fromMedia) return fromMedia;
+function mediaRichness(m: FacebookMediaAttachment): number {
+  return (m.caption ? 4 : 0) + (m.width ? 2 : 0) + (m.height ? 1 : 0);
+}
+
+function mergeMedia(
+  existing?: FacebookMediaAttachment[],
+  incoming?: FacebookMediaAttachment[],
+): FacebookMediaAttachment[] | undefined {
+  const merged = [...(existing ?? []), ...(incoming ?? [])];
+  if (!merged.length) return undefined;
+  const byKey = new Map<string, FacebookMediaAttachment>();
+  for (const item of merged) {
+    const key = `${item.type}:${item.id ?? item.caption ?? ""}`;
+    const prev = byKey.get(key);
+    if (!prev || mediaRichness(item) > mediaRichness(prev)) {
+      byKey.set(key, item);
+    }
   }
-  return undefined;
+  const out = [...byKey.values()];
+  return out.length ? out : undefined;
+}
+
+function mergeShare(
+  existing?: FacebookShareInfo,
+  incoming?: FacebookShareInfo,
+): FacebookShareInfo | undefined {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  return {
+    originalPostId: incoming.originalPostId ?? existing.originalPostId,
+    originalAuthorName: incoming.originalAuthorName ?? existing.originalAuthorName,
+    originalText: incoming.originalText ?? existing.originalText,
+    originalUrl: incoming.originalUrl ?? existing.originalUrl,
+  };
 }
 
 function commentText(node: Record<string, unknown>): string | undefined {
@@ -130,45 +158,280 @@ export interface ExtractFacebookOptions {
   tabUrl?: string;
 }
 
-function consolidateReactions(
-  raw: FacebookReaction[],
-): { reactions: FacebookReaction[]; hints: string[] } {
-  const hints: string[] = [];
-  const byPost = new Map<string, FacebookReaction[]>();
-  const noPost: FacebookReaction[] = [];
+function postRichness(post: FacebookPost): number {
+  let score = 0;
+  if (post.text) score += Math.min(post.text.length, 500);
+  if (post.authorName) score += 20;
+  if (post.authorId) score += 5;
+  if (post.url) score += 10;
+  if (post.feedbackId) score += 5;
+  if (post.media?.length) score += 30;
+  if (post.share) score += 15;
+  if (!post.partialParse) score += 100;
+  if (post.createdAt) score += 3;
+  return score;
+}
 
-  for (const r of raw) {
-    if (!r.postId) {
-      noPost.push(r);
+function mergePosts(primary: FacebookPost, secondary: FacebookPost): FacebookPost {
+  const richer = postRichness(primary) >= postRichness(secondary) ? primary : secondary;
+  const other = richer === primary ? secondary : primary;
+  return {
+    ...other,
+    ...richer,
+    id: richer.id,
+    postId: richer.postId ?? other.postId,
+    text:
+      (richer.text?.length ?? 0) >= (other.text?.length ?? 0) ? richer.text : other.text,
+    authorName: richer.authorName ?? other.authorName,
+    authorId: richer.authorId ?? other.authorId,
+    url: richer.url ?? other.url,
+    feedbackId: richer.feedbackId ?? other.feedbackId,
+    partialParse: Boolean(richer.partialParse && other.partialParse),
+    reactionCount: richer.reactionCount ?? other.reactionCount,
+    commentCount: richer.commentCount ?? other.commentCount,
+    media: mergeMedia(other.media, richer.media),
+    share: mergeShare(other.share, richer.share),
+    createdAt: richer.createdAt ?? other.createdAt,
+    source: richer.source || other.source,
+  };
+}
+
+function normalizePostTextForMatch(text?: string): string {
+  if (!text) return "";
+  return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function postsMatchByText(a: FacebookPost, b: FacebookPost): boolean {
+  const left = normalizePostTextForMatch(a.text);
+  const right = normalizePostTextForMatch(b.text);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const minLen = Math.min(left.length, right.length);
+  if (minLen < 20) return false;
+  const prefixLen = Math.min(40, minLen);
+  return left.slice(0, prefixLen) === right.slice(0, prefixLen);
+}
+
+/** Drop regex-fallback partial posts when a full parse exists for the same text. */
+function dedupePartialPosts(posts: FacebookPost[]): FacebookPost[] {
+  const fullPosts = posts.filter((post) => !post.partialParse && post.text);
+  return posts.filter((post) => {
+    if (!post.partialParse) return true;
+    return !fullPosts.some((full) => postsMatchByText(post, full));
+  });
+}
+
+function dedupePostsByPostId(posts: FacebookPost[]): FacebookPost[] {
+  const withoutPostId: FacebookPost[] = [];
+  const byPostId = new Map<string, FacebookPost>();
+
+  for (const post of posts) {
+    const postId = post.postId ?? postIdFromFacebookUrl(post.url);
+    if (!postId) {
+      withoutPostId.push(post);
       continue;
     }
-    const list = byPost.get(r.postId) ?? [];
-    list.push(r);
-    byPost.set(r.postId, list);
+    const normalized = post.postId ? post : { ...post, postId };
+    const existing = byPostId.get(postId);
+    byPostId.set(postId, existing ? mergePosts(existing, normalized) : normalized);
   }
 
-  const out: FacebookReaction[] = [...noPost];
-  for (const [postId, list] of byPost) {
+  return [...withoutPostId, ...byPostId.values()];
+}
+
+function pushReactor(
+  reactions: FacebookReaction[],
+  addPerson: (p: Omit<FacebookPerson, "source"> & { source: string }) => void,
+  args: {
+    feedbackId?: string;
+    userId: string;
+    userName: string;
+    reactionType?: string;
+    reactionCount?: number;
+    source: string;
+  },
+): void {
+  const target = decodeFeedbackTarget(args.feedbackId);
+  if (target.target === "comment" && target.commentId) {
+    reactions.push({
+      feedbackId: args.feedbackId,
+      postId: target.postId,
+      commentId: target.commentId,
+      target: "comment",
+      userId: args.userId,
+      userName: args.userName,
+      reactionType: args.reactionType,
+      reactionCount: args.reactionCount,
+      source: args.source,
+    });
+  } else if (target.target === "post" && target.postId) {
+    reactions.push({
+      feedbackId: args.feedbackId,
+      postId: target.postId,
+      target: "post",
+      userId: args.userId,
+      userName: args.userName,
+      reactionType: args.reactionType,
+      reactionCount: args.reactionCount,
+      source: args.source,
+    });
+  }
+  addPerson({ id: args.userId, name: args.userName, source: args.source });
+}
+function backfillReactionTypes(reactions: FacebookReaction[]): FacebookReaction[] {
+  const typed = new Map<string, string>();
+  for (const reaction of reactions) {
+    if (!reaction.reactionType) continue;
+    const key =
+      reaction.target === "comment" && reaction.commentId
+        ? `comment:${reaction.commentId}:${reaction.userId}`
+        : reaction.postId
+          ? `post:${reaction.postId}:${reaction.userId}`
+          : undefined;
+    if (key) typed.set(key, reaction.reactionType);
+  }
+
+  return reactions.map((reaction) => {
+    if (reaction.reactionType) return reaction;
+    const key =
+      reaction.target === "comment" && reaction.commentId
+        ? `comment:${reaction.commentId}:${reaction.userId}`
+        : reaction.postId
+          ? `post:${reaction.postId}:${reaction.userId}`
+          : undefined;
+    const fromPeer = key ? typed.get(key) : undefined;
+    return fromPeer ? { ...reaction, reactionType: fromPeer } : reaction;
+  });
+}
+
+function consolidateReactionBucket(
+  raw: FacebookReaction[],
+  keyFor: (reaction: FacebookReaction) => string | undefined,
+  hintPrefix: string,
+): { reactions: FacebookReaction[]; hints: string[] } {
+  const hints: string[] = [];
+  const byKey = new Map<string, FacebookReaction[]>();
+  const unmatched: FacebookReaction[] = [];
+
+  for (const reaction of raw) {
+    const key = keyFor(reaction);
+    if (!key) {
+      unmatched.push(reaction);
+      continue;
+    }
+    const list = byKey.get(key) ?? [];
+    list.push(reaction);
+    byKey.set(key, list);
+  }
+
+  const out: FacebookReaction[] = [...unmatched];
+  for (const [key, list] of byKey) {
     const dialog = list.filter((r) => isDialogReactionSource(r.source));
     const chosen = dialog.length > 0 ? dialog : list;
     const seen = new Set<string>();
-    for (const r of chosen) {
-      if (seen.has(r.userId)) continue;
-      seen.add(r.userId);
-      out.push(r);
+    for (const reaction of chosen) {
+      if (seen.has(reaction.userId)) continue;
+      seen.add(reaction.userId);
+      out.push(reaction);
     }
     if (dialog.length === 0 && list.length > 0) {
       const total = list[0]?.reactionCount;
       const captured = seen.size;
       if (total != null && total > captured) {
         hints.push(
-          `Post ${postId}: only reaction tooltip captured (${captured}/${total}) — open full reactions dialog for complete list`,
+          `${hintPrefix} ${key}: only reaction tooltip captured (${captured}/${total}) — open full reactions dialog for complete list`,
         );
       }
     }
   }
 
   return { reactions: out, hints };
+}
+
+function consolidateReactions(
+  raw: FacebookReaction[],
+): { reactions: FacebookReaction[]; hints: string[] } {
+  const postRaw = raw.filter((r) => r.target !== "comment");
+  const commentRaw = raw.filter((r) => r.target === "comment");
+  const posts = consolidateReactionBucket(postRaw, (r) => r.postId, "Post");
+  const comments = consolidateReactionBucket(commentRaw, (r) => r.commentId, "Comment");
+  return {
+    reactions: [...posts.reactions, ...comments.reactions],
+    hints: [...posts.hints, ...comments.hints],
+  };
+}
+
+function toLinkedReaction(r: FacebookReaction) {
+  return {
+    userId: r.userId,
+    userName: r.userName,
+    reactionType: r.reactionType,
+  };
+}
+
+function attachPostContext(
+  posts: FacebookPost[],
+  groups: FacebookGroupSummary[],
+  tabUrl?: string,
+): FacebookPost[] {
+  const primaryGroup = groups[0];
+  const sessionSurface = inferFacebookSurface(tabUrl);
+  return posts.map((post) => {
+    const url = post.url ?? tabUrl;
+    let surface = post.surface ?? inferFacebookSurface(url);
+    if (surface === "unknown") surface = sessionSurface;
+    const inGroup = surface === "group";
+    return {
+      ...post,
+      surface,
+      groupId: post.groupId ?? (inGroup ? primaryGroup?.id : undefined),
+      groupName: post.groupName ?? (inGroup ? primaryGroup?.name : undefined),
+    };
+  });
+}
+
+function linkCommentsToReactions(
+  comments: FacebookComment[],
+  reactions: FacebookReaction[],
+): FacebookComment[] {
+  const byCommentId = new Map<string, FacebookReaction[]>();
+  const byLegacyKey = new Map<string, FacebookReaction[]>();
+
+  for (const reaction of reactions) {
+    if (reaction.target !== "comment" || !reaction.commentId) continue;
+    const list = byCommentId.get(reaction.commentId) ?? [];
+    list.push(reaction);
+    byCommentId.set(reaction.commentId, list);
+    const legacy = commentLegacyKey(reaction.commentId);
+    if (legacy) {
+      const legacyList = byLegacyKey.get(legacy) ?? [];
+      legacyList.push(reaction);
+      byLegacyKey.set(legacy, legacyList);
+    }
+  }
+
+  return comments.map((comment) => {
+    const legacy = commentLegacyKey(comment.id);
+    const matched = [
+      ...(byCommentId.get(comment.id) ?? []),
+      ...(legacy ? byLegacyKey.get(legacy) ?? [] : []),
+    ];
+    if (!matched.length) return comment;
+
+    const seen = new Set<string>();
+    const unique: FacebookReaction[] = [];
+    for (const reaction of matched) {
+      if (seen.has(reaction.userId)) continue;
+      seen.add(reaction.userId);
+      unique.push(reaction);
+    }
+
+    return {
+      ...comment,
+      reactionCount: unique.length,
+      linkedReactions: unique.map(toLinkedReaction),
+    };
+  });
 }
 
 function linkPostsToComments(
@@ -192,12 +455,17 @@ function linkPostsToComments(
     return {
       ...post,
       postId,
-      commentCount: matched.length,
+      commentCount:
+        post.commentCount != null
+          ? Math.max(post.commentCount, matched.length)
+          : matched.length,
       linkedComments: matched.map((c) => ({
         id: c.id,
         authorName: c.authorName,
         text: c.text,
         createdAt: c.createdAt,
+        reactionCount: c.reactionCount,
+        linkedReactions: c.linkedReactions,
       })),
     };
   });
@@ -209,7 +477,7 @@ function linkPostsToReactions(
 ): FacebookPost[] {
   const byPostId = new Map<string, FacebookReaction[]>();
   for (const r of reactions) {
-    if (!r.postId) continue;
+    if (!r.postId || r.target === "comment") continue;
     const list = byPostId.get(r.postId) ?? [];
     list.push(r);
     byPostId.set(r.postId, list);
@@ -225,8 +493,11 @@ function linkPostsToReactions(
       ...post,
       postId,
       feedbackId: post.feedbackId ?? matched[0]?.feedbackId,
-      reactionCount: matched.length,
-      linkedReactions: matched.map((r) => ({ userId: r.userId, userName: r.userName })),
+      reactionCount:
+        post.reactionCount != null
+          ? Math.max(post.reactionCount, matched.length)
+          : matched.length,
+      linkedReactions: matched.map(toLinkedReaction),
     };
   });
 
@@ -238,7 +509,7 @@ function linkPostsToReactions(
       feedbackId: matched[0]?.feedbackId,
       source: "reactions_inferred",
       reactionCount: matched.length,
-      linkedReactions: matched.map((r) => ({ userId: r.userId, userName: r.userName })),
+      linkedReactions: matched.map(toLinkedReaction),
     });
   }
 
@@ -258,7 +529,9 @@ export function extractFacebookGroupActivity(
   opts: ExtractFacebookOptions = {},
 ): FacebookGroupActivity {
   const groups = new Map<string, FacebookGroupSummary>();
+  const members = new Map<string, FacebookGroupMember>();
   const people = new Map<string, FacebookPerson>();
+  const reactionNames = new Map<string, string>();
   const posts = new Map<string, FacebookPost>();
   const comments = new Map<string, FacebookComment>();
   const commentKeys = new Map<string, string>();
@@ -274,18 +547,29 @@ export function extractFacebookGroupActivity(
     if (!people.has(key)) people.set(key, p);
   };
 
-  const addGroup = (id: string, name?: string, url?: string) => {
+  const addGroup = (
+    id: string,
+    name?: string,
+    url?: string,
+    memberCountText?: string,
+  ) => {
     const existing = groups.get(id);
     if (existing) {
       groups.set(id, {
         id,
         name: name ?? existing.name,
         url: url ?? existing.url,
+        memberCountText: memberCountText ?? existing.memberCountText,
       });
     } else {
-      groups.set(id, { id, name, url });
+      groups.set(id, { id, name, url, memberCountText });
     }
     if (url?.includes("/groups/") && !primaryGroupUrl) primaryGroupUrl = url;
+  };
+
+  const addMember = (member: FacebookGroupMember) => {
+    const key = `${member.userId}:${member.groupId ?? ""}`;
+    if (!members.has(key)) members.set(key, member);
   };
 
   const normalizePost = (post: FacebookPost): FacebookPost => ({
@@ -310,6 +594,8 @@ export function extractFacebookGroupActivity(
       authorId: normalized.authorId ?? existing.authorId,
       postId: normalized.postId ?? existing.postId,
       feedbackId: normalized.feedbackId ?? existing.feedbackId,
+      media: mergeMedia(existing.media, normalized.media),
+      share: mergeShare(existing.share, normalized.share),
     }));
   };
 
@@ -398,6 +684,36 @@ export function extractFacebookGroupActivity(
 
     for (const root of parsed) {
       walk(root, (node) => {
+        collectReactionNames(node, reactionNames);
+
+        const hovercard = node.comet_hovercard_renderer;
+        if (hovercard && typeof hovercard === "object") {
+          const renderer = hovercard as Record<string, unknown>;
+          if (renderer.__typename === "CometHovercardGroupMemberRenderer") {
+            const actor = renderer.actor;
+            if (actor && typeof actor === "object") {
+              const a = actor as Record<string, unknown>;
+              const userId = typeof a.id === "string" ? a.id : undefined;
+              const name = typeof a.name === "string" ? a.name : undefined;
+              const groupNode =
+                (renderer.group as Record<string, unknown> | undefined) ??
+                (
+                  (renderer.group_membership as { group?: unknown } | undefined)?.group as
+                    | Record<string, unknown>
+                    | undefined
+                );
+              const groupId = typeof groupNode?.id === "string" ? groupNode.id : undefined;
+              const groupName = typeof groupNode?.name === "string" ? groupNode.name : undefined;
+              const membership = renderer.group_membership as { role?: unknown } | undefined;
+              const role = typeof membership?.role === "string" ? membership.role : undefined;
+              if (userId && name) {
+                addMember({ userId, name, groupId, groupName, role, source });
+                addPerson({ id: userId, name, source });
+              }
+            }
+          }
+        }
+
         const feedbackNode =
           node.__typename === "Feedback"
             ? node
@@ -406,27 +722,46 @@ export function extractFacebookGroupActivity(
               : null;
         if (feedbackNode) {
           const feedbackId = typeof feedbackNode.id === "string" ? feedbackNode.id : undefined;
-          const postId = decodeFeedbackPostId(feedbackId);
           const total =
             feedbackNode.total_reaction_count &&
             typeof feedbackNode.total_reaction_count === "object" &&
             typeof (feedbackNode.total_reaction_count as { count?: unknown }).count === "number"
               ? (feedbackNode.total_reaction_count as { count: number }).count
               : undefined;
-          const reactors = feedbackNode.reactors as { nodes?: unknown[] } | undefined;
+          const reactors = feedbackNode.reactors as
+            | { nodes?: unknown[]; edges?: unknown[] }
+            | undefined;
+          for (const edge of reactors?.edges ?? []) {
+            if (!edge || typeof edge !== "object") continue;
+            const e = edge as Record<string, unknown>;
+            const user = e.node;
+            if (!user || typeof user !== "object") continue;
+            const u = user as Record<string, unknown>;
+            const userId = typeof u.id === "string" ? u.id : undefined;
+            const userName = typeof u.name === "string" ? u.name : undefined;
+            if (!userId || !userName) continue;
+            const reactionInfo = e.feedback_reaction_info as { id?: string } | undefined;
+            const reactionType = reactionTypeFromId(reactionInfo?.id, reactionNames);
+            pushReactor(reactions, addPerson, {
+              feedbackId,
+              userId,
+              userName,
+              reactionType,
+              reactionCount: total,
+              source,
+            });
+          }
           for (const r of reactors?.nodes ?? []) {
             if (!r || typeof r !== "object") continue;
             const u = r as Record<string, unknown>;
             if (u.__typename === "User" && typeof u.id === "string" && typeof u.name === "string") {
-              reactions.push({
+              pushReactor(reactions, addPerson, {
                 feedbackId,
-                postId,
                 userId: u.id,
                 userName: u.name,
                 reactionCount: total,
                 source,
               });
-              addPerson({ id: u.id, name: u.name, source });
             }
           }
         }
@@ -438,6 +773,7 @@ export function extractFacebookGroupActivity(
               node.id,
               typeof node.name === "string" ? node.name : undefined,
               typeof node.url === "string" ? node.url : undefined,
+              groupMemberCountText(node),
             );
           }
 
@@ -508,10 +844,15 @@ export function extractFacebookGroupActivity(
               : typeof story.post_id === "number"
                 ? String(story.post_id)
                 : sessionPostId);
-          const storyFeedback =
+          const storyFeedbackObj =
             story.feedback && typeof story.feedback === "object"
-              ? (story.feedback as { id?: string }).id
+              ? (story.feedback as Record<string, unknown>)
               : undefined;
+          const storyFeedback =
+            typeof storyFeedbackObj?.id === "string" ? storyFeedbackObj.id : undefined;
+          const feedCounts = feedbackCounts(storyFeedbackObj);
+          const media = extractMediaFromAttachments(story.attachments);
+          const share = shareFromAttachedStory(story.attached_story);
           addPost({
             id: story.id,
             postId: storyPostId,
@@ -526,6 +867,10 @@ export function extractFacebookGroupActivity(
                 ? groupPermalinkUrl(primaryGroupUrl ?? opts.tabUrl, storyPostId)
                 : undefined),
             source,
+            reactionCount: feedCounts.reactionCount,
+            commentCount: feedCounts.commentCount,
+            media: media.length ? media : undefined,
+            share,
           });
         }
       });
@@ -547,15 +892,24 @@ export function extractFacebookGroupActivity(
     }
   }
 
-  const { reactions: mergedReactions, hints: reactionHints } = consolidateReactions(reactions);
-  const linkedPosts = linkPosts([...posts.values()], mergedReactions, [...comments.values()]);
+  const { reactions: mergedReactions, hints: reactionHints } = consolidateReactions(
+    backfillReactionTypes(reactions),
+  );
+  const linkedComments = linkCommentsToReactions([...comments.values()], mergedReactions);
+  const dedupedPosts = dedupePartialPosts(dedupePostsByPostId([...posts.values()]));
+  const linkedPosts = attachPostContext(
+    linkPosts(dedupedPosts, mergedReactions, linkedComments),
+    [...groups.values()],
+    opts.tabUrl,
+  );
   const uniqueWarnings = [...new Set([...parseWarnings, ...reactionHints])];
 
   return {
     groups: [...groups.values()],
+    members: [...members.values()],
     people: [...people.values()],
     posts: linkedPosts,
-    comments: [...comments.values()],
+    comments: linkedComments,
     reactions: mergedReactions,
     graphqlQueryHints: [...queryHints.values()].sort((a, b) => b.count - a.count),
     sessionPermalink: opts.tabUrl?.includes("/permalink/") ? opts.tabUrl : undefined,
@@ -565,13 +919,14 @@ export function extractFacebookGroupActivity(
 
 export const facebookGroupsEnricher: SessionEnricher = {
   id: "facebook-groups",
-  label: "Facebook Groups activity",
+  label: "Facebook activity",
   enrich(data) {
     const activity = extractFacebookGroupActivity(data.network, {
       tabUrl: data.session?.tabUrl,
     });
     const hasData =
       activity.groups.length > 0 ||
+      activity.members.length > 0 ||
       activity.people.length > 0 ||
       activity.posts.length > 0 ||
       activity.comments.length > 0 ||

@@ -1,11 +1,9 @@
-import { broadcastCaptureState } from "../background/broadcast.js";
-import { appendConsole, readSessionData, upsertNetwork } from "../persistence/store.js";
+import { readSessionData, upsertNetwork } from "../persistence/store.js";
 import { updateDebuggerHealth } from "../persistence/session-recovery.js";
 import { recordHealthGap } from "../persistence/store.js";
 import { captureApiBodiesForRequest, shouldCaptureApiBody } from "./api-body-capture.js";
 import { getActiveSession } from "./session-manager.js";
-import { recordTimeline } from "./timeline.js";
-import type { ConsoleEntry, NetworkEntry } from "../shared/types.js";
+import type { NetworkEntry } from "../shared/types.js";
 
 const CDP_VERSION = "1.3";
 const pendingCdp = new Map<string, Partial<NetworkEntry>>();
@@ -22,20 +20,8 @@ export async function attachDebugger(tabId: number): Promise<void> {
   try {
     await chrome.debugger.attach({ tabId }, CDP_VERSION);
     await chrome.debugger.sendCommand({ tabId }, "Network.enable");
-    await chrome.debugger.sendCommand({ tabId }, "Runtime.enable");
-    await chrome.debugger.sendCommand({ tabId }, "Log.enable");
     attachedTabId = tabId;
     await updateDebuggerHealth({ attached: true });
-    const session = await getActiveSession();
-    if (session?.active) {
-      await broadcastCaptureState(true, session.id, true);
-    }
-    await recordTimeline(
-      (await getActiveSession())?.id ?? "unknown",
-      "system",
-      "debugger_attach",
-      `Debugger attached to tab ${tabId}`,
-    );
   } catch (err) {
     await recordHealthGap(`debugger_attach_failed: ${(err as Error).message}`);
     throw err;
@@ -134,69 +120,6 @@ async function onDebuggerEvent(
     pendingBodyCaptures.add(job);
     void job.finally(() => pendingBodyCaptures.delete(job));
   }
-
-  if (method === "Runtime.consoleAPICalled") {
-    if (!session.options.consoleCapture) return;
-    const args = ((p?.args as { value?: unknown; description?: string }[]) ?? []).map((a) =>
-      String(a.description ?? a.value ?? ""),
-    );
-    const entry: ConsoleEntry = {
-      id: crypto.randomUUID(),
-      sessionId: session.id,
-      timestamp: Date.now(),
-      level: String(p?.type ?? "log") as ConsoleEntry["level"],
-      args,
-      url: session.tabUrl ?? "",
-      tabId: source.tabId,
-      source: "debugger",
-    };
-    await appendConsole(entry);
-    await recordTimeline(session.id, "console", entry.level, args.join(" ").slice(0, 120));
-  }
-
-  if (method === "Runtime.exceptionThrown") {
-    if (!session.options.consoleCapture) return;
-    const details = p?.exceptionDetails as {
-      text?: string;
-      exception?: { description?: string; value?: string };
-      stackTrace?: {
-        description?: string;
-        callFrames?: {
-          functionName?: string;
-          url?: string;
-          lineNumber?: number;
-          columnNumber?: number;
-        }[];
-      };
-    };
-    const stack =
-      details?.stackTrace?.description ??
-      details?.stackTrace?.callFrames
-        ?.map((f) => {
-          const fn = f.functionName || "<anonymous>";
-          const loc = f.url ? `${f.url}:${f.lineNumber ?? 0}:${f.columnNumber ?? 0}` : "";
-          return loc ? `    at ${fn} (${loc})` : `    at ${fn}`;
-        })
-        .join("\n");
-    const msg =
-      details?.text ??
-      details?.exception?.description ??
-      details?.exception?.value ??
-      "exception";
-    const entry: ConsoleEntry = {
-      id: crypto.randomUUID(),
-      sessionId: session.id,
-      timestamp: Date.now(),
-      level: "error",
-      args: [msg],
-      url: session.tabUrl ?? "",
-      stack,
-      tabId: source.tabId,
-      source: "debugger",
-    };
-    await appendConsole(entry);
-    await recordTimeline(session.id, "console", "exception", entry.args.join(" ").slice(0, 120));
-  }
 }
 
 export function registerDebuggerCapture(): void {
@@ -216,7 +139,6 @@ export function registerDebuggerCapture(): void {
 
     void getActiveSession().then((s) => {
       if (!s?.active) return;
-      void broadcastCaptureState(true, s.id, false);
       scheduleRecover();
     });
   });

@@ -1,5 +1,5 @@
 import { MessageType } from "../shared/messages.js";
-import type { ExportZipResponse } from "../shared/messages.js";
+import type { ExportEntityCounts, ExportZipResponse } from "../shared/messages.js";
 import { base64ToUint8 } from "../shared/bytes.js";
 import { downloadZipFromPage } from "../export/download.js";
 import { hasTruncation } from "../persistence/limits.js";
@@ -9,7 +9,7 @@ import { sendMessageWithTimeout } from "./messaging.js";
 
 const EMPTY_STATE: PopupStateResponse = {
   session: null,
-  counts: { console: 0, network: 0, timeline: 0 },
+  counts: { network: 0 },
   canExport: false,
 };
 
@@ -21,8 +21,6 @@ const loadingPanel = el("loading-panel");
 const startPanel = el("start-panel");
 const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
-const optGraphqlBodies = el<HTMLInputElement>("opt-graphql-bodies");
-const optConsole = el<HTMLInputElement>("opt-console");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnExport = el<HTMLButtonElement>("btn-export");
@@ -31,15 +29,37 @@ const statusEl = el("status");
 const healthHint = el("health-hint");
 const exportStatus = el("export-status");
 const exportHint = el("export-hint");
+const exportEntities = el("export-entities");
 const cNetwork = el("c-network");
-const cTimeline = el("c-timeline");
 const eNetwork = el("e-network");
-const eTimeline = el("e-timeline");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
   const t = session?.health?.truncation;
   if (!t || !hasTruncation(t)) return "";
-  return `Truncated: console −${t.console}, network −${t.network}, timeline −${t.timeline}`;
+  return `Truncated: network −${t.network}`;
+}
+
+function formatEntityCounts(counts: ExportEntityCounts): string {
+  return `${counts.posts} posts · ${counts.comments} comments · ${counts.reactions} reactions`;
+}
+
+function showExportEntities(counts?: ExportEntityCounts): void {
+  if (!exportEntities) return;
+  if (!counts) {
+    exportEntities.classList.add("hidden");
+    exportEntities.textContent = "";
+    return;
+  }
+  exportEntities.textContent = formatEntityCounts(counts);
+  exportEntities.classList.remove("hidden");
+}
+
+let lastExportCounts: ExportEntityCounts | undefined;
+
+function applyExportResult(res: ExportZipResponse): void {
+  if (res.counts) lastExportCounts = res.counts;
+  showExportEntities(lastExportCounts);
+  setText(exportHint, `Saved ${res.filename ?? "export"}`);
 }
 
 function setText(node: HTMLElement | null, text: string): void {
@@ -56,9 +76,7 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   exportPanel?.classList.toggle("hidden", !loaded || active || !canExport);
 
   setText(cNetwork, String(state.counts.network));
-  setText(cTimeline, String(state.counts.timeline));
   setText(eNetwork, String(state.counts.network));
-  setText(eTimeline, String(state.counts.timeline));
 
   if (active && state.session) {
     setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
@@ -83,9 +101,14 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
         ? "Tab closed — partial capture ready"
         : "Capture ended",
     );
+    showExportEntities(lastExportCounts);
     const trunc = truncationHint(state.session);
     const gaps = state.session.health?.partialGaps?.length ?? 0;
-    setText(exportHint, trunc || (gaps ? `${gaps} capture gap(s) recorded` : "ZIP downloaded locally"));
+    if (!lastExportCounts) {
+      setText(exportHint, trunc || (gaps ? `${gaps} capture gap(s) recorded` : "ZIP downloaded locally"));
+    }
+  } else {
+    showExportEntities(undefined);
   }
 
   if (btnStart) btnStart.disabled = active;
@@ -101,16 +124,7 @@ async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
 btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
   try {
-    await sendMessageWithTimeout(
-      {
-        type: MessageType.CONSENT_AND_START,
-        options: {
-          graphqlBodies: optGraphqlBodies?.checked ?? true,
-          consoleCapture: optConsole?.checked ?? false,
-        },
-      },
-      30_000,
-    );
+    await sendMessageWithTimeout({ type: MessageType.CONSENT_AND_START }, 30_000);
     await refresh();
   } catch {
     btnStart.disabled = false;
@@ -135,7 +149,7 @@ async function requestStopAndExport(): Promise<void> {
     );
     await downloadFromResponse(res);
     captureActive = false;
-    setText(exportHint, `Saved ${res.filename ?? "export"}`);
+    applyExportResult(res);
     await refresh();
   } catch (err) {
     stopRequested = false;
@@ -155,7 +169,7 @@ btnExport?.addEventListener("click", async () => {
       180_000,
     );
     await downloadFromResponse(res);
-    setText(exportHint, `Saved ${res.filename ?? "export"}`);
+    applyExportResult(res);
   } catch (err) {
     setText(exportHint, err instanceof Error ? err.message : "Export failed");
   } finally {
@@ -164,6 +178,7 @@ btnExport?.addEventListener("click", async () => {
 });
 
 btnNewSession?.addEventListener("click", async () => {
+  lastExportCounts = undefined;
   await sendMessageWithTimeout({ type: MessageType.DISCARD_CAPTURE }, 30_000);
   await refresh();
 });

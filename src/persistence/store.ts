@@ -6,14 +6,9 @@ import {
 } from "./limits.js";
 import type {
   CaptureSession,
-  ConsoleEntry,
-  DiagnosticsBundle,
-  DomSnapshot,
   NetworkEntry,
   SessionData,
   StorageTruncation,
-  TimelineEvent,
-  UserAction,
 } from "../shared/types.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
@@ -22,12 +17,7 @@ const ACTIVE_FLAG = "browserListenerActiveSessionId";
 export function emptySessionData(): SessionData {
   return {
     session: null,
-    timeline: [],
-    console: [],
     network: [],
-    userActions: [],
-    diagnostics: [],
-    domSnapshots: [],
   };
 }
 
@@ -39,7 +29,6 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
     serviceWorkerRestarts: h.serviceWorkerRestarts ?? 0,
     partialGaps: h.partialGaps ?? [],
     persistenceErrors: h.persistenceErrors ?? [],
-    eventCounts: h.eventCounts ?? {},
     truncation: h.truncation ?? emptyTruncation(),
     apiBodyBytesStored: h.apiBodyBytesStored,
     apiBodiesSkippedSessionCap: h.apiBodiesSkippedSessionCap,
@@ -116,28 +105,6 @@ export async function setSession(session: CaptureSession | null): Promise<void> 
   await withSession((data) => ({ ...data, session }));
 }
 
-export async function appendTimeline(event: TimelineEvent): Promise<void> {
-  await withSession((data) => {
-    if (!data.session?.active) return data;
-    data.session = applyCap(data.timeline, redactDeep(event), "timeline", data.session);
-    data.session = bumpHealth(data.session, {
-      eventCounts: {
-        ...data.session.health.eventCounts,
-        [event.category]: (data.session.health.eventCounts[event.category] ?? 0) + 1,
-      },
-    });
-    return data;
-  });
-}
-
-export async function appendConsole(entry: ConsoleEntry): Promise<void> {
-  await withSession((data) => {
-    if (!data.session?.active || entry.sessionId !== data.session.id) return data;
-    data.session = applyCap(data.console, redactDeep(entry), "console", data.session);
-    return data;
-  });
-}
-
 export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   await withSession((data) => {
     if (!data.session?.active) return data;
@@ -148,32 +115,6 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
     } else {
       data.session = applyCap(data.network, redacted, "network", data.session);
     }
-    return data;
-  });
-}
-
-export async function appendUserAction(action: UserAction): Promise<void> {
-  await withSession((data) => {
-    if (!data.session?.active) return data;
-    data.session = applyCap(data.userActions, redactDeep(action), "userActions", data.session);
-    return data;
-  });
-}
-
-export async function appendDiagnostics(bundle: DiagnosticsBundle): Promise<void> {
-  await withSession((data) => {
-    if (!data.session?.active) return data;
-    data.diagnostics.push(redactDeep(bundle));
-    if (data.diagnostics.length > 50) data.diagnostics.shift();
-    return data;
-  });
-}
-
-export async function appendDomSnapshot(snapshot: DomSnapshot): Promise<void> {
-  await withSession((data) => {
-    if (!data.session?.active) return data;
-    data.domSnapshots.push(redactDeep(snapshot));
-    if (data.domSnapshots.length > 20) data.domSnapshots.shift();
     return data;
   });
 }

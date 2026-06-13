@@ -14,10 +14,6 @@ describe("api body capture", () => {
     expect(DEFAULT_CAPTURE_OPTIONS.graphqlBodies).toBe(true);
   });
 
-  it("disables console capture by default", () => {
-    expect(DEFAULT_CAPTURE_OPTIONS.consoleCapture).toBe(false);
-  });
-
   it("uses larger cap for feed pagination GraphQL", () => {
     const postData =
       "fb_api_req_friendly_name=CometNewsFeedPaginationQuery&doc_id=123";
@@ -28,6 +24,12 @@ describe("api body capture", () => {
   it("uses larger cap for single post dialog GraphQL", () => {
     const postData =
       "fb_api_req_friendly_name=CometSinglePostDialogContentQuery&doc_id=123";
+    expect(apiBodyCapForRequest(postData)).toBe(API_BODY_LIMITS.perResponseLarge);
+  });
+
+  it("uses larger cap for group feed pagination GraphQL", () => {
+    const postData =
+      "fb_api_req_friendly_name=GroupsCometFeedRegularStoriesPaginationQuery&doc_id=123";
     expect(apiBodyCapForRequest(postData)).toBe(API_BODY_LIMITS.perResponseLarge);
   });
 

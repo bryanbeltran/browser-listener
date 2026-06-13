@@ -3,7 +3,7 @@ import { emptySessionData, readSessionData, writeSessionData } from "../src/pers
 import { sampleSession } from "./helpers/fixtures.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 
-describe("session stop timeline", () => {
+describe("session stop", () => {
   beforeEach(() => {
     installChromeStorageMock();
   });
@@ -12,7 +12,7 @@ describe("session stop timeline", () => {
     uninstallChromeStorageMock();
   });
 
-  it("records session_stop before deactivating session", async () => {
+  it("deactivates session on stop", async () => {
     const session = sampleSession({ active: true });
     await writeSessionData({ ...emptySessionData(), session });
     await chrome.storage.local.set({ browserListenerActiveSessionId: session.id });
@@ -22,6 +22,6 @@ describe("session stop timeline", () => {
 
     const data = await readSessionData();
     expect(data.session?.active).toBe(false);
-    expect(data.timeline.some((e) => e.type === "session_stop")).toBe(true);
+    expect(data.session?.stoppedAt).toBeTypeOf("number");
   });
 });

@@ -83,6 +83,16 @@ h1 {
   margin: 10px 0;
 }
 
+.export-entities {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.export-entities.hidden {
+  display: none;
+}
+
 button {
   width: 100%;
   padding: 10px;

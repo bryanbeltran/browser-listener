@@ -1,7 +1,6 @@
 import { upsertNetwork } from "../persistence/store.js";
 import { isDebuggerAttachedToTab } from "./debugger-capture.js";
 import { getActiveSession } from "./session-manager.js";
-import { recordTimeline } from "./timeline.js";
 import type { NetworkEntry } from "../shared/types.js";
 
 /** CDP is authoritative when attached; webRequest would duplicate entries. */
@@ -41,14 +40,6 @@ async function flush(requestId: string, patch: Partial<NetworkEntry>): Promise<v
   pending.set(requestId, merged);
   if (merged.url) {
     await upsertNetwork(merged);
-    if (patch.statusCode != null || patch.error) {
-      await recordTimeline(
-        active.id,
-        "network",
-        patch.error ? "network_error" : "network_complete",
-        `${merged.method} ${merged.url}`.slice(0, 200),
-      );
-    }
   }
 }
 

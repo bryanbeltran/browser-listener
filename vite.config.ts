@@ -16,7 +16,6 @@ export default defineConfig({
       closeBundle() {
         const nested = join("dist", "src", "popup", "index.html");
         let html = readFileSync(nested, "utf8");
-        // Asset paths from dist/popup.html (not dist/src/popup/)
         html = html.replace(/\.\.\/\.\.\//g, "./");
         writeFileSync(join("dist", "popup.html"), html);
       },
@@ -28,7 +27,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         background: resolve(__dirname, "src/background/index.ts"),
-        content: resolve(__dirname, "src/content/index.ts"),
         popup: resolve(__dirname, "src/popup/index.html"),
       },
       output: {

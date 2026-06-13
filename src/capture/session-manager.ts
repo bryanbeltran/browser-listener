@@ -5,7 +5,6 @@ import {
   setSession,
   withSession,
 } from "../persistence/store.js";
-import { recordTimeline } from "./timeline.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -16,7 +15,6 @@ function newHealth(): CaptureSession["health"] {
     serviceWorkerRestarts: 0,
     partialGaps: [],
     persistenceErrors: [],
-    eventCounts: {},
     truncation: emptyTruncation(),
   };
 }
@@ -39,14 +37,8 @@ export async function createSession(
   await clearSessionData();
   await withSession(() => ({
     session,
-    timeline: [],
-    console: [],
     network: [],
-    userActions: [],
-    diagnostics: [],
-    domSnapshots: [],
   }));
-  await recordTimeline(session.id, "system", "session_start", `Capture started on tab ${tabId}`);
   return session;
 }
 
@@ -59,7 +51,6 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
     stoppedAt: Date.now(),
     tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
   };
-  await recordTimeline(data.session.id, "system", "session_stop", "Capture stopped");
   await setSession(stopped);
   return stopped;
 }

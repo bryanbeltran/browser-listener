@@ -18,7 +18,7 @@ describe("popup state", () => {
     await writeSessionData({
       ...emptySessionData(),
       session,
-      network: [{ id: "n1", sessionId: "popup-session", requestId: "r1", timestamp: 1, url: "https://example.com", method: "GET", type: "xhr" }],
+      network: [{ id: "n1", sessionId: "popup-session", requestId: "r1", timestamp: 1, url: "https://www.facebook.com/api/graphql/", method: "POST", type: "xhr" }],
     });
     await chrome.storage.local.set({ browserListenerActiveSessionId: "popup-session" });
 
@@ -29,18 +29,19 @@ describe("popup state", () => {
     expect(state.canExport).toBe(false);
   });
 
-  it("popupStateFromSessionData sets canExport when stopped with data", () => {
+  it("popupStateFromSessionData sets canExport when stopped with network data", () => {
     const state = popupStateFromSessionData({
       ...emptySessionData(),
       session: sampleSession({ active: false }),
-      console: [
+      network: [
         {
-          id: "c1",
+          id: "n1",
           sessionId: "test-session-1",
+          requestId: "r1",
           timestamp: 1,
-          level: "log",
-          args: ["hi"],
-          url: "https://example.com",
+          url: "https://www.facebook.com/api/graphql/",
+          method: "POST",
+          type: "xhr",
         },
       ],
     });

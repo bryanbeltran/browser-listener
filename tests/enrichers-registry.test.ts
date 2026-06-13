@@ -9,30 +9,17 @@ describe("enrichers registry", () => {
     expect(out.session?.id).toBe("test-session-1");
   });
 
-  it("runs enricher only when enabled in session options", async () => {
+  it("runs all registered enrichers at export time", async () => {
     const data = leakySessionData();
     registerEnricher({
       id: "test-enricher",
       label: "Test",
       enrich: (s) => ({
         ...s,
-        timeline: [
-          ...s.timeline,
-          {
-            id: "t-enriched",
-            sessionId: s.session!.id,
-            timestamp: Date.now(),
-            category: "system",
-            type: "enriched",
-            summary: "enriched",
-          },
-        ],
+        enrichments: { ...s.enrichments, facebookGroups: { groups: [], members: [], people: [], posts: [], comments: [], reactions: [], graphqlQueryHints: [] } },
       }),
     });
-    const without = await applyEnrichers(data);
-    expect(without.timeline.some((t) => t.type === "enriched")).toBe(false);
-    data.session!.options.enricherIds = ["test-enricher"];
-    const with_ = await applyEnrichers(data);
-    expect(with_.timeline.some((t) => t.type === "enriched")).toBe(true);
+    const out = await applyEnrichers(data);
+    expect(out.enrichments?.facebookGroups).toBeDefined();
   });
 });

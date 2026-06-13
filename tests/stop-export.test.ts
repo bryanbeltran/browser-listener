@@ -20,18 +20,11 @@ vi.mock("../src/capture/debugger-capture.js", () => ({
   flushPendingApiBodyCaptures: vi.fn(async () => {}),
 }));
 
-vi.mock("../src/capture/page-snapshot.js", () => ({
-  captureTabMhtml: vi.fn(async () => null),
-}));
-
-vi.mock("../src/background/broadcast.js", () => ({
-  broadcastCaptureState: vi.fn(async () => {}),
-}));
-
 vi.mock("../src/export/orchestrator.js", () => ({
   prepareZipExport: vi.fn(async () => ({
     zip: new Uint8Array([1, 2, 3]),
     filename: "test.zip",
+    counts: { network: 1, posts: 2, comments: 3, reactions: 4 },
   })),
 }));
 

@@ -17,6 +17,13 @@ export function buildFacebookCsvFiles(
 ): Record<string, string> {
   const files: Record<string, string> = {};
 
+  if (activity.members.length) {
+    files["csv/members.csv"] = toCsv(
+      ["userId", "name", "groupId", "groupName", "role", "source"],
+      activity.members.map((m) => [m.userId, m.name, m.groupId, m.groupName, m.role, m.source]),
+    );
+  }
+
   if (activity.people.length) {
     files["csv/people.csv"] = toCsv(
       ["id", "name", "url", "source"],
@@ -33,8 +40,14 @@ export function buildFacebookCsvFiles(
         "authorName",
         "text",
         "url",
+        "surface",
+        "groupId",
+        "groupName",
         "reactionCount",
         "commentCount",
+        "mediaCount",
+        "shareAuthor",
+        "shareText",
         "source",
         "partialParse",
       ],
@@ -45,8 +58,14 @@ export function buildFacebookCsvFiles(
         p.authorName,
         p.text,
         p.url,
+        p.surface,
+        p.groupId,
+        p.groupName,
         p.reactionCount,
         p.commentCount,
+        p.media?.length,
+        p.share?.originalAuthorName,
+        p.share?.originalText,
         p.source,
         p.partialParse ? "yes" : "",
       ]),
@@ -55,11 +74,24 @@ export function buildFacebookCsvFiles(
 
   if (activity.reactions.length) {
     files["csv/reactions.csv"] = toCsv(
-      ["userId", "userName", "postId", "feedbackId", "reactionCount", "source"],
+      [
+        "userId",
+        "userName",
+        "reactionType",
+        "postId",
+        "commentId",
+        "target",
+        "feedbackId",
+        "reactionCount",
+        "source",
+      ],
       activity.reactions.map((r) => [
         r.userId,
         r.userName,
+        r.reactionType,
         r.postId,
+        r.commentId,
+        r.target,
         r.feedbackId,
         r.reactionCount,
         r.source,
@@ -69,8 +101,15 @@ export function buildFacebookCsvFiles(
 
   if (activity.comments.length) {
     files["csv/comments.csv"] = toCsv(
-      ["id", "postId", "authorName", "text", "source"],
-      activity.comments.map((c) => [c.id, c.postId, c.authorName, c.text, c.source]),
+      ["id", "postId", "authorName", "text", "reactionCount", "source"],
+      activity.comments.map((c) => [
+        c.id,
+        c.postId,
+        c.authorName,
+        c.text,
+        c.reactionCount,
+        c.source,
+      ]),
     );
   }
 

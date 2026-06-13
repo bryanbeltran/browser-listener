@@ -1,86 +1,53 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 import { extractFacebookGroupActivity } from "../src/enrichers/facebook-groups.js";
 import { buildGraphqlCaptures } from "../src/export/graphql-captures.js";
+import { prepareZipExport } from "../src/export/orchestrator.js";
 import { buildZipFromSessionData } from "../src/export/orchestrator.js";
+import { DEFAULT_CAPTURE_OPTIONS } from "../src/shared/types.js";
+import type { NetworkEntry, SessionData } from "../src/shared/types.js";
 import { unzipToMap } from "./helpers/unzip.js";
-import type { NetworkEntry } from "../src/shared/types.js";
-
-const CAPTURE_ZIPS = [
-  join(
-    process.env.HOME ?? "",
-    "Downloads/browser-listener-8cf1a523-c5d6-4b85-8be4-9ba62d966ae1-1781121454058.zip",
-  ),
-  join(
-    process.env.HOME ?? "",
-    "Downloads/browser-listener-4f9a5725-7a38-43cc-a5aa-1329f643ccb9-1781121046926.zip",
-  ),
-  join(
-    process.env.HOME ?? "",
-    "Downloads/browser-listener-525fe264-3b9c-43d0-83e0-fb378e733718-1781120390899.zip",
-  ),
-  join(
-    process.env.HOME ?? "",
-    "Downloads/browser-listener-255ddf3a-049e-4ac6-bf55-2cc774b7ef18-1781111369768.zip",
-  ),
-];
-
-function networkFromZip(zipPath: string): NetworkEntry[] | null {
-  if (!existsSync(zipPath)) return null;
-  const zip = unzipSync(new Uint8Array(readFileSync(zipPath)));
-  const har = JSON.parse(new TextDecoder().decode(zip["network.har"]));
-  return har.log.entries.map(
-    (
-      e: {
-        startedDateTime: string;
-        request: { method: string; url: string; postData?: { text?: string } };
-        response: {
-          status: number;
-          content?: { text?: string; mimeType?: string };
-        };
-      },
-      i: number,
-    ) => ({
-      id: `n-${i}`,
-      sessionId: "fixture",
-      requestId: `req-${i}`,
-      timestamp: Date.parse(e.startedDateTime),
-      url: e.request.url,
-      method: e.request.method,
-      type: "xhr",
-      statusCode: e.response.status,
-      requestBody: e.request.postData?.text,
-      responseBody: e.response.content?.text,
-      responseBodyTruncated: (e.response.content?.text?.length ?? 0) >= 262144,
-      bodyCaptured: Boolean(e.response.content?.text),
-      contentType: e.response.content?.mimeType,
-    }),
-  );
-}
-
-function firstAvailableZip(): { path: string; network: NetworkEntry[] } | null {
-  for (const path of CAPTURE_ZIPS) {
-    const network = networkFromZip(path);
-    if (network) return { path, network };
-  }
-  return null;
-}
+import {
+  loadFacebookFixture,
+  type FacebookFixtureName,
+} from "./helpers/facebook-fixtures.js";
 
 const PERMALINK =
   "https://www.facebook.com/groups/richfieldmncommunity/permalink/27021670184127456/";
 const GROUP_FEED = "https://www.facebook.com/groups/richfieldmncommunity";
 
+function fixture(name: FacebookFixtureName): NetworkEntry[] {
+  return loadFacebookFixture(name).network;
+}
+
+function sessionData(network: NetworkEntry[], tabUrl: string, id: string): SessionData {
+  return {
+    session: {
+      id,
+      active: false,
+      consentedAt: 1,
+      startedAt: 1,
+      stoppedAt: 2,
+      tabId: 1,
+      tabUrl,
+      options: { ...DEFAULT_CAPTURE_OPTIONS },
+      health: {
+        debuggerAttached: true,
+        debuggerDetachCount: 0,
+        serviceWorkerRestarts: 0,
+        partialGaps: [],
+        persistenceErrors: [],
+        truncation: { network: 0 },
+      },
+    },
+    network,
+  };
+}
+
 describe("facebook groups enricher", () => {
   it("extracts comment text and links comments to posts", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[0]);
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
+    const activity = extractFacebookGroupActivity(fixture("comments-dialog"), {
+      tabUrl: GROUP_FEED,
+    });
     expect(activity.comments.length).toBe(7);
     expect(activity.comments.every((c) => c.text && c.postId)).toBe(true);
     expect(
@@ -99,27 +66,19 @@ describe("facebook groups enricher", () => {
     expect(junkPost?.commentCount).toBe(2);
   });
 
-  it("prefers reactions dialog over tooltip and hints when tooltip-only", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[0]);
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
+  it("captures post reactions from the reactions dialog query", () => {
+    const activity = extractFacebookGroupActivity(fixture("comments-dialog"), {
+      tabUrl: GROUP_FEED,
+    });
     expect(
-      activity.parseWarnings?.some((w) => w.includes("only reaction tooltip captured")),
+      activity.reactions.some((r) => /CometUFIReactionsDialog/i.test(r.source)),
     ).toBe(true);
   });
 
   it("extracts posts with postId and linked reactions from dialog capture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[1]);
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const activity = extractFacebookGroupActivity(fixture, { tabUrl: GROUP_FEED });
+    const activity = extractFacebookGroupActivity(fixture("reactions-dialog"), {
+      tabUrl: GROUP_FEED,
+    });
     expect(activity.people.length).toBeGreaterThan(5);
     expect(activity.posts.length).toBeGreaterThan(0);
     expect(
@@ -131,14 +90,85 @@ describe("facebook groups enricher", () => {
     expect(activity.reactions.length).toBeGreaterThan(5);
   });
 
-  it("extracts posts, linked reactions, and people from permalink capture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[2]);
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
+  it("extracts photo media and typed reactions from dialog capture", () => {
+    const activity = extractFacebookGroupActivity(fixture("reactions-dialog"), {
+      tabUrl: GROUP_FEED,
+    });
+    const photoPosts = activity.posts.filter((p) => p.postId === "27014819028145905");
+    expect(photoPosts).toHaveLength(1);
+    const photoPost = photoPosts[0];
+    expect(photoPost?.media?.length).toBeGreaterThan(0);
+    expect(photoPost?.media?.[0]?.type).toBe("photo");
+    expect(photoPost?.media?.[0]?.caption).toContain("hotdog");
 
-    const activity = extractFacebookGroupActivity(fixture, { tabUrl: PERMALINK });
+    const dialogReactions = activity.reactions.filter((r) =>
+      /CometUFIReactionsDialog/i.test(r.source),
+    );
+    expect(dialogReactions.some((r) => r.reactionType === "Like")).toBe(true);
+  });
+
+  it("extracts comment reactions and links them to comments", () => {
+    const commentFeedbackId = btoa("feedback:27003110325983442_27005068155787659");
+    const commentId = btoa("comment:27003110325983442_27005068155787659");
+    const synthetic: NetworkEntry = {
+      id: "n-comment-reaction",
+      sessionId: "fixture",
+      requestId: "req-comment-reaction",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=CommentListComponentsRootQuery&doc_id=synthetic-comment-reactions",
+      responseBody: JSON.stringify({
+        data: {
+          node: {
+            __typename: "Feedback",
+            id: commentFeedbackId,
+            total_reaction_count: { count: 1 },
+            reactors: {
+              nodes: [{ __typename: "User", id: "9001", name: "Comment Reactor" }],
+            },
+            comments: {
+              edges: [
+                {
+                  node: {
+                    __typename: "Comment",
+                    id: commentId,
+                    body: { text: "Yes, like thjd?" },
+                    author: { id: "1", name: "Author" },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      bodyCaptured: true,
+    };
+
+    const activity = extractFacebookGroupActivity(
+      [...fixture("comments-dialog"), synthetic],
+      { tabUrl: GROUP_FEED },
+    );
+
+    const comment = activity.comments.find((c) => c.text?.includes("Yes, like thjd"));
+    expect(comment?.linkedReactions?.length).toBe(1);
+    expect(comment?.linkedReactions?.[0]?.userName).toBe("Comment Reactor");
+
+    const commentReaction = activity.reactions.find((r) => r.target === "comment");
+    expect(commentReaction?.commentId).toBe(commentId);
+    expect(commentReaction?.userName).toBe("Comment Reactor");
+
+    const catPost = activity.posts.find((p) => p.postId === "27003110325983442");
+    expect(catPost?.linkedComments?.some((c) => c.linkedReactions?.length === 1)).toBe(true);
+  });
+
+  it("extracts posts, linked reactions, and people from permalink capture", () => {
+    const activity = extractFacebookGroupActivity(fixture("permalink"), {
+      tabUrl: PERMALINK,
+    });
     expect(activity.people.length).toBeGreaterThan(5);
     expect(activity.reactions.length).toBeGreaterThan(0);
     expect(
@@ -151,71 +181,156 @@ describe("facebook groups enricher", () => {
     expect(activity.parseWarnings?.length).toBeGreaterThan(0);
   });
 
-  it("extracts people and reactions from feed capture fixture", () => {
-    const fixture = networkFromZip(CAPTURE_ZIPS[3]);
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
-
-    const activity = extractFacebookGroupActivity(fixture);
+  it("extracts people, reactions, members, and group member count from feed capture", () => {
+    const activity = extractFacebookGroupActivity(fixture("feed"));
     expect(activity.groups.some((g) => g.id === "623366241051210")).toBe(true);
+    expect(activity.groups.find((g) => g.id === "623366241051210")?.memberCountText).toBe(
+      "53.8K members",
+    );
+    expect(activity.members.length).toBeGreaterThan(0);
+    expect(activity.members.some((m) => m.groupName?.includes("Richfield"))).toBe(true);
     expect(activity.people.length).toBeGreaterThan(5);
     expect(activity.reactions.length).toBeGreaterThan(0);
+    expect(activity.reactions.every((r) => r.reactionType)).toBe(true);
+    expect(activity.reactions.some((r) => r.reactionType === "Like")).toBe(true);
+  });
+
+  it("extracts feed-level reaction and comment counts onto posts", () => {
+    const postText =
+      "China cabinet for free. Items shown inside the cabinet are not included.";
+    const responseBody = `{"data":{"__typename":"Story","id":"UzpfTest","post_id":"2405034246652002","message":{"text":"${postText}"},"feedback":{"id":"ZmVkYmFja2s6MjQwNTAzNDI0NjY1MjAwMg==","reaction_count":{"count":5},"comment_count":{"total_count":3}},"actors":[{"id":"541862394","name":"Christina Krol"}]}}
+{broken`;
+    const entry: NetworkEntry = {
+      id: "n-feed-counts",
+      sessionId: "fixture",
+      requestId: "req-feed-counts",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=GroupsCometFeedRegularStoriesPaginationQuery&doc_id=1",
+      responseBody,
+      bodyCaptured: true,
+    };
+
+    const activity = extractFacebookGroupActivity([entry], { tabUrl: GROUP_FEED });
+    const post = activity.posts.find((p) => p.postId === "2405034246652002");
+    expect(post?.reactionCount).toBe(5);
+    expect(post?.commentCount).toBe(3);
+    expect(activity.posts.some((p) => p.partialParse)).toBe(false);
+  });
+
+  it("drops partial posts when a full post matches by text", () => {
+    const postText =
+      "China cabinet for free. Items shown inside the cabinet are not included.";
+    const responseBody = `{"data":{"__typename":"Story","id":"UzpfTest","post_id":"2405034246652002","message":{"text":"${postText}"},"feedback":{"id":"ZmVk"},"actors":[{"id":"541862394","name":"Christina Krol"}]}}
+{broken`;
+    const entry: NetworkEntry = {
+      id: "n-partial-dedupe",
+      sessionId: "fixture",
+      requestId: "req-partial-dedupe",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=GroupsCometFeedRegularStoriesPaginationQuery&doc_id=1",
+      responseBody,
+      bodyCaptured: true,
+    };
+
+    const activity = extractFacebookGroupActivity([entry], { tabUrl: GROUP_FEED });
+    const matches = activity.posts.filter((p) => p.text?.includes("China cabinet"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.partialParse).toBeFalsy();
+    expect(matches[0]?.postId).toBe("2405034246652002");
+  });
+
+  it("backfills reaction types onto tooltip reactors when tab refetch is present", () => {
+    const postFeedbackId = btoa("feedback:27021756384118836");
+    const tooltip: NetworkEntry = {
+      id: "n-tooltip",
+      sessionId: "fixture",
+      requestId: "req-tooltip",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=CometUFIReactionIconTooltipContentQuery&doc_id=tooltip",
+      responseBody: JSON.stringify({
+        data: {
+          feedback: {
+            __typename: "Feedback",
+            id: postFeedbackId,
+            reactors: {
+              nodes: [{ __typename: "User", id: "9001", name: "Tooltip User" }],
+            },
+          },
+        },
+      }),
+      bodyCaptured: true,
+    };
+    const tabRefetch: NetworkEntry = {
+      id: "n-tab",
+      sessionId: "fixture",
+      requestId: "req-tab",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=CometUFIReactionsDialogTabContentRefetchQuery&doc_id=tab",
+      responseBody: JSON.stringify({
+        data: {
+          node: {
+            __typename: "Feedback",
+            id: postFeedbackId,
+            reactors: {
+              edges: [
+                {
+                  feedback_reaction_info: { id: "1635855486666999" },
+                  node: { __typename: "User", id: "9001", name: "Tooltip User" },
+                },
+              ],
+            },
+          },
+        },
+      }),
+      bodyCaptured: true,
+    };
+
+    const activity = extractFacebookGroupActivity([tooltip, tabRefetch]);
+    const reaction = activity.reactions.find((r) => r.userId === "9001");
+    expect(reaction?.reactionType).toBe("Like");
+    expect(reaction?.source).toContain("TabContentRefetch");
   });
 
   it("builds graphql-captures.json entries with doc_id hints", () => {
-    const fixture = firstAvailableZip();
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
-    const captures = buildGraphqlCaptures(fixture.network);
+    const captures = buildGraphqlCaptures(fixture("comments-dialog"));
     expect(captures.length).toBeGreaterThan(5);
     expect(captures.some((c) => c.friendlyName && c.docId)).toBe(true);
   });
 
-  it("includes group-activity.json and csv in export when enricher enabled", async () => {
-    const fixture = firstAvailableZip();
-    if (!fixture) {
-      expect(true).toBe(true);
-      return;
-    }
+  it("includes members csv when feed fixture has hovercard members", async () => {
+    const network = fixture("feed");
 
-    const zip = await buildZipFromSessionData({
-      session: {
-        id: "fb-fixture",
-        active: false,
-        consentedAt: 1,
-        startedAt: 1,
-        stoppedAt: 2,
-        tabId: 1,
-        tabUrl: PERMALINK,
-        options: {
-          screenRecording: false,
-          tabAudio: false,
-          staticAssetBodies: false,
-          graphqlBodies: true,
-          consoleCapture: false,
-          enricherIds: ["facebook-groups"],
-        },
-        health: {
-          debuggerAttached: true,
-          debuggerDetachCount: 0,
-          serviceWorkerRestarts: 0,
-          partialGaps: [],
-          persistenceErrors: [],
-          eventCounts: {},
-          truncation: { console: 0, network: 0, timeline: 0, userActions: 0 },
-        },
-      },
-      timeline: [],
-      console: [],
-      network: fixture.network,
-      userActions: [],
-      diagnostics: [],
-      domSnapshots: [],
-    });
+    const zip = await buildZipFromSessionData(sessionData(network, GROUP_FEED, "fb-feed-fixture"));
+
+    const files = unzipToMap(zip);
+    expect(files["csv/members.csv"]).toBeDefined();
+    expect(files["csv/members.csv"]).toContain("Richfield");
+  });
+
+  it("includes group-activity.json and csv in export when enricher enabled", async () => {
+    const network = fixture("permalink");
+
+    const zip = await buildZipFromSessionData(sessionData(network, PERMALINK, "fb-fixture"));
 
     const files = unzipToMap(zip);
     expect(files["group-activity.json"]).toBeDefined();
@@ -224,7 +339,26 @@ describe("facebook groups enricher", () => {
     expect(files["csv/reactions.csv"]).toBeDefined();
     const activity = JSON.parse(files["group-activity.json"]);
     expect(activity.people.length).toBeGreaterThan(0);
-    expect(files["report.html"]).toContain("Facebook group activity");
+    expect(files["report.html"]).toContain("Facebook activity");
     expect(files["report.html"]).toContain("post-block");
+  });
+
+  it("prepareZipExport returns entity counts for popup summary", async () => {
+    const network = fixture("comments-dialog");
+    const { writeSessionData } = await import("../src/persistence/store.js");
+    const { installChromeStorageMock, uninstallChromeStorageMock } = await import(
+      "./helpers/mock-chrome.js"
+    );
+    installChromeStorageMock();
+    try {
+      await writeSessionData(sessionData(network, GROUP_FEED, "counts-fixture"));
+      const bundle = await prepareZipExport();
+      expect(bundle.counts.posts).toBeGreaterThan(0);
+      expect(bundle.counts.comments).toBeGreaterThan(0);
+      expect(bundle.counts.reactions).toBeGreaterThan(0);
+      expect(bundle.counts.network).toBe(network.length);
+    } finally {
+      uninstallChromeStorageMock();
+    }
   });
 });

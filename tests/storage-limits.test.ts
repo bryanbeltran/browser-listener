@@ -6,14 +6,12 @@ describe("storage limits", () => {
     const arr: number[] = [];
     const truncation = emptyTruncation();
     const max = 3;
-    for (let i = 0; i < 5; i++) pushWithCap(arr, i, max, truncation, "console");
+    for (let i = 0; i < 5; i++) pushWithCap(arr, i, max, truncation, "network");
     expect(arr).toEqual([2, 3, 4]);
-    expect(truncation.console).toBe(2);
+    expect(truncation.network).toBe(2);
   });
 
-  it("defines limits for core arrays", () => {
-    expect(STORAGE_LIMITS.console).toBeGreaterThan(1000);
+  it("defines network storage limit", () => {
     expect(STORAGE_LIMITS.network).toBeGreaterThan(1000);
-    expect(STORAGE_LIMITS.timeline).toBeGreaterThan(STORAGE_LIMITS.console);
   });
 });
