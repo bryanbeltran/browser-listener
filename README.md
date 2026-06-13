@@ -16,7 +16,8 @@ All capture is consent-gated, stored locally, and redacted before export. Option
 ## Stack
 
 - TypeScript + Vite (multi-entry: background, content, popup)
-- `chrome.storage.local` session persistence
+- `chrome.storage.local` session metadata + popup snapshot
+- IndexedDB network log (append per entry; 128MB byte budget, 100k entry soft cap per session)
 - `chrome.debugger` (CDP) + `chrome.webRequest` (metadata fallback)
 - `fflate` ZIP builder
 - Vitest unit/regression tests
@@ -88,6 +89,7 @@ Reload the target tab after install. Open Facebook (group feed, timeline, or a p
 | Denormalized reaction context (`targetAuthorId`, `targetText`, `targetPostId`) |
 | Author ID backfill + people dedupe (`facebook-identity.ts`) |
 | Export-time reaction hydration pass (`runExportReactionHydration` before ZIP) |
+| IndexedDB network log — per-entry GraphQL storage (128MB byte budget, 100k entry soft cap) |
 
 #### Blocking — before confident pro/anti user classification
 
@@ -166,7 +168,7 @@ Tips for richer exports: open the full reactions dialog (not just hover tooltip)
 src/
   capture/        Session manager, debugger CDP, GraphQL body capture, webRequest fallback
   redaction/      Configurable rules + default-deny sensitive keys
-  persistence/    Storage + MV3 service-worker recovery
+  persistence/    storage.local (session meta) + IndexedDB (network), MV3 recovery
   export/         ZIP orchestration, CSV, graphql-captures
   report/         Facebook-focused HTML report
   enrichers/      Facebook GraphQL parser (always on at export)
@@ -203,7 +205,8 @@ Facebook parsing runs automatically at export via `src/enrichers/facebook-groups
 
 | Permission | Why |
 |------------|-----|
-| `storage` | Local session persistence |
+| `storage` | Session metadata (small) |
+| `unlimitedStorage` | Large GraphQL capture in IndexedDB |
 | `downloads` | Local ZIP export only |
 | `tabs` | Active tab targeting |
 | `debugger` | CDP network capture for GraphQL (shows debugging banner) |

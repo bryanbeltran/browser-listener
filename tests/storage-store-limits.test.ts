@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("../src/persistence/limits.js", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("../src/persistence/limits.js")>();
-  return {
-    ...orig,
-    STORAGE_LIMITS: { network: 5 },
-  };
-});
+import { NETWORK_STORE_LIMITS } from "../src/persistence/limits.js";
 
 describe("store truncation tracking", () => {
+  const originalCap = NETWORK_STORE_LIMITS.entrySoftCap;
+
   beforeEach(async () => {
+    NETWORK_STORE_LIMITS.entrySoftCap = 5;
+    NETWORK_STORE_LIMITS.byteBudget = Number.MAX_SAFE_INTEGER;
     const { installChromeStorageMock } = await import("./helpers/mock-chrome.js");
     installChromeStorageMock();
   });
 
   afterEach(async () => {
+    NETWORK_STORE_LIMITS.entrySoftCap = originalCap;
+    NETWORK_STORE_LIMITS.byteBudget = 128 * 1024 * 1024;
     const { uninstallChromeStorageMock } = await import("./helpers/mock-chrome.js");
     uninstallChromeStorageMock();
     vi.resetModules();
@@ -33,7 +32,7 @@ describe("store truncation tracking", () => {
         id: `n-${i}`,
         sessionId: session.id,
         requestId: `req-${i}`,
-        timestamp: Date.now(),
+        timestamp: Date.now() + i,
         url: `https://www.facebook.com/api/graphql/?i=${i}`,
         method: "POST",
         type: "xhr",

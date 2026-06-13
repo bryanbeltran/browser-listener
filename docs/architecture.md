@@ -13,15 +13,18 @@ flowchart LR
     BG[Background hub]
     CDP[Debugger CDP]
     WR[webRequest fallback]
-    Store[(storage.local)]
+    Meta[(storage.local — session meta)]
+    IDB[(IndexedDB — network entries)]
     Export[ZIP export]
   end
 
   Popup -->|CONSENT_AND_START| BG
   BG --> CDP
   BG --> WR
-  BG --> Store
-  BG -->|redact on write| Store
+  BG --> Meta
+  BG --> IDB
+  BG -->|redact on write| Meta
+  BG -->|redact on write| IDB
   Popup -->|STOP_AND_EXPORT| BG
   BG --> Export
   Export -->|parse GraphQL + redact| Download[downloads API]
@@ -33,7 +36,7 @@ flowchart LR
 |--------|----------------|
 | `capture/` | Session lifecycle, CDP debugger, GraphQL body capture, webRequest metadata |
 | `redaction/` | Default-deny sensitive keys; applied on persist + export |
-| `persistence/` | `chrome.storage.local`, caps, SW recovery |
+| `persistence/` | `chrome.storage.local` (session meta), IndexedDB (network entries), caps, SW recovery |
 | `export/` | ZIP orchestration, CSV, graphql-captures archive |
 | `report/` | Facebook-focused offline HTML |
 | `enrichers/` | Facebook GraphQL parser (always applied at export) |
@@ -55,13 +58,14 @@ flowchart LR
 | Service worker restart | `chrome.storage.session` detects reboot; debugger reattach attempted |
 | Debugger detach | Health gap logged; retry attach while session active |
 | Tab closed mid-capture | Detach debugger, stop session, **keep** persisted data; popup offers partial export |
-| Storage pressure | Network ring buffer with `health.truncation.network` count |
+| Storage pressure | IndexedDB byte budget + entry soft cap; oldest entries evicted; `health.truncation.network` count |
 
 ## Permissions
 
 | Permission | Rationale |
 |------------|-----------|
-| `storage` | Session persistence |
+| `storage` | Session metadata persistence |
+| `unlimitedStorage` | Large GraphQL body retention in IndexedDB |
 | `downloads` | Local ZIP only |
 | `tabs` | Target active tab |
 | `debugger` | CDP GraphQL capture |
@@ -170,7 +174,7 @@ Reaction-based classification needs both **who reacted** and **what they reacted
 | Missing comment reactors | Comment `feedbackId` not in capture; comment not hydration target | `selectNextCommentForHydration` + export pass budgets for comments |
 | `reactionType` missing | Tooltip rows lack per-user type | `backfillReactionTypes` peers dialog rows onto tooltip rows |
 | `targetText` missing on reactions | Post/comment not captured or `partialParse` | Prioritize hydration for reactions lacking `targetText`; improve partial JSON text extraction |
-| Truncated network buffer | >10k GraphQL rows dropped | Surface in `coverage-report.json`; optionally raise cap or spill to IndexedDB |
+| Truncated network buffer | Byte budget or entry soft cap exceeded | Evict oldest entries; surface in `coverage-report.json` *(planned)* |
 
 Hydration already runs in two phases: slow session sampling (`SAMPLE_REACTION_TYPE_IDS`) and a final `runExportReactionHydration` pass before ZIP. Remaining work is **coverage-driven target selection** (hydrate under-covered content first), **budget tuning** tied to coverage metrics, and **paginating until `captured >= reactionCount`** per target.
 

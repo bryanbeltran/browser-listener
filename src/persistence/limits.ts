@@ -1,13 +1,42 @@
-import type { StorageTruncation } from "../shared/types.js";
+import type { NetworkEntry, StorageTruncation } from "../shared/types.js";
 
+/** Mutable limits — patch in tests (e.g. `NETWORK_STORE_LIMITS.entrySoftCap = 5`). */
+export const NETWORK_STORE_LIMITS = {
+  byteBudget: 128 * 1024 * 1024,
+  entrySoftCap: 100_000,
+};
+
+export const NETWORK_BYTE_BUDGET = NETWORK_STORE_LIMITS.byteBudget;
+export const NETWORK_ENTRY_SOFT_CAP = NETWORK_STORE_LIMITS.entrySoftCap;
+
+/** @deprecated Use NETWORK_ENTRY_SOFT_CAP — kept for tests that mock limits. */
 export const STORAGE_LIMITS = {
-  network: 10_000,
+  network: NETWORK_ENTRY_SOFT_CAP,
 } as const;
 
 export function emptyTruncation(): StorageTruncation {
   return { network: 0 };
 }
 
+export function estimateNetworkEntryBytes(entry: NetworkEntry): number {
+  let bytes = 256;
+  bytes += entry.url.length;
+  if (entry.requestBody) bytes += entry.requestBody.length;
+  if (entry.responseBody) bytes += entry.responseBody.length;
+  return bytes;
+}
+
+export function totalNetworkBytes(entries: readonly NetworkEntry[]): number {
+  let total = 0;
+  for (const entry of entries) total += estimateNetworkEntryBytes(entry);
+  return total;
+}
+
+export function hasTruncation(t: StorageTruncation): boolean {
+  return t.network > 0;
+}
+
+/** Ring-buffer helper (used in unit tests; production uses IndexedDB eviction). */
 export function pushWithCap<T>(
   arr: T[],
   item: T,
@@ -20,8 +49,4 @@ export function pushWithCap<T>(
     arr.shift();
     truncation[bucket] += 1;
   }
-}
-
-export function hasTruncation(t: StorageTruncation): boolean {
-  return t.network > 0;
 }

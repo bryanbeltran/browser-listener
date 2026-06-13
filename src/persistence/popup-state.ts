@@ -1,5 +1,5 @@
 import { emptyTruncation } from "./limits.js";
-import type { PopupStateSnapshot, SessionData } from "../shared/types.js";
+import type { CaptureSession, PopupStateSnapshot } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 
 export const POPUP_STATE_KEY = "browserListenerPopupState";
@@ -12,8 +12,10 @@ export function emptyPopupStateSnapshot(): PopupStateSnapshot {
   };
 }
 
-export function buildPopupStateSnapshot(data: SessionData): PopupStateSnapshot {
-  const session = data.session;
+export function buildPopupStateSnapshot(
+  session: CaptureSession | null,
+  networkCount: number,
+): PopupStateSnapshot {
   const active = Boolean(session?.active);
   return {
     session: session
@@ -30,8 +32,8 @@ export function buildPopupStateSnapshot(data: SessionData): PopupStateSnapshot {
           },
         }
       : null,
-    counts: { network: data.network.length },
-    canExport: !active && data.network.length > 0,
+    counts: { network: networkCount },
+    canExport: !active && networkCount > 0,
   };
 }
 
