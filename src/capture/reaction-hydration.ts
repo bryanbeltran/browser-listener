@@ -61,6 +61,7 @@ type SchedulerState = {
   lastOrganicActivityAt: number;
   lastTargetHydratedAt: number;
   running: boolean;
+  exportInProgress: boolean;
   docIdGapRecorded: boolean;
   templateGapRecorded: boolean;
 };
@@ -73,6 +74,7 @@ const state: SchedulerState = {
   lastOrganicActivityAt: 0,
   lastTargetHydratedAt: 0,
   running: false,
+  exportInProgress: false,
   docIdGapRecorded: false,
   templateGapRecorded: false,
 };
@@ -96,6 +98,7 @@ export function resetReactionHydrationScheduler(): void {
   state.lastOrganicActivityAt = 0;
   state.lastTargetHydratedAt = 0;
   state.running = false;
+  state.exportInProgress = false;
   state.docIdGapRecorded = false;
   state.templateGapRecorded = false;
   if (debounceTimer) clearTimeout(debounceTimer);
@@ -204,6 +207,7 @@ export function selectNextCommentForHydration(
   opts: {
     hotFeedbackIds: ReadonlySet<string>;
     hydratedCommentIds: ReadonlySet<string>;
+    skipExistingDialogReactions?: boolean;
   },
 ): FacebookComment | undefined {
   const ranked = comments
@@ -211,6 +215,7 @@ export function selectNextCommentForHydration(
     .filter((c) => !opts.hydratedCommentIds.has(c.id))
     .filter(
       (c) =>
+        opts.skipExistingDialogReactions ||
         !reactions.some(
           (r) =>
             r.target === "comment" &&
@@ -239,6 +244,7 @@ function selectNextHydrationTarget(
     postsHydrated: number;
     commentsHydrated: number;
     skipDialogCoverage?: boolean;
+    skipExistingDialogReactions?: boolean;
   },
 ): HydrationTarget | undefined {
   const hydratedPosts = new Set(
@@ -275,6 +281,7 @@ function selectNextHydrationTarget(
     const comment = selectNextCommentForHydration(comments, reactions, {
       hotFeedbackIds: opts.hotFeedbackIds,
       hydratedCommentIds: hydratedComments,
+      skipExistingDialogReactions: opts.skipExistingDialogReactions,
     });
     if (comment?.feedbackId) {
       candidates.push({
@@ -536,7 +543,7 @@ async function tabReadyForHydration(
 }
 
 async function runReactionHydrationCycle(tabId: number): Promise<void> {
-  if (state.running) return;
+  if (state.running || state.exportInProgress) return;
 
   const session = await getActiveSession();
   if (!session?.active || !session.options.reactionHydration) return;
@@ -627,45 +634,57 @@ export async function runExportReactionHydration(tabId: number): Promise<void> {
   if (getAttachedTabId() !== tabId) return;
   if (!(await tabReadyForHydration(tabId, false))) return;
 
+  if (debounceTimer) clearTimeout(debounceTimer);
+  if (retryTimer) clearTimeout(retryTimer);
+  debounceTimer = null;
+  retryTimer = null;
+  state.exportInProgress = true;
+
   const exportHydrated = new Set<string>();
   let postsDone = 0;
   let commentsDone = 0;
 
-  while (postsDone < EXPORT_HYDRATION_MAX_POSTS || commentsDone < EXPORT_HYDRATION_MAX_COMMENTS) {
-    const data = await readSessionData();
-    const activity = extractFacebookGroupActivity(data.network, { tabUrl: session.tabUrl });
-    const target = selectNextHydrationTarget(
-      activity.posts,
-      activity.comments,
-      activity.reactions,
-      {
-        hotFeedbackIds: state.hotFeedbackIds,
-        hydratedKeys: exportHydrated,
-        tabUrl: session.tabUrl,
-        maxPosts: EXPORT_HYDRATION_MAX_POSTS,
-        maxComments: EXPORT_HYDRATION_MAX_COMMENTS,
-        postsHydrated: postsDone,
-        commentsHydrated: commentsDone,
-        skipDialogCoverage: true,
-      },
-    );
-    if (!target) break;
+  try {
+    while (postsDone < EXPORT_HYDRATION_MAX_POSTS || commentsDone < EXPORT_HYDRATION_MAX_COMMENTS) {
+      const data = await readSessionData();
+      const activity = extractFacebookGroupActivity(data.network, { tabUrl: session.tabUrl });
+      const target = selectNextHydrationTarget(
+        activity.posts,
+        activity.comments,
+        activity.reactions,
+        {
+          hotFeedbackIds: state.hotFeedbackIds,
+          hydratedKeys: exportHydrated,
+          tabUrl: session.tabUrl,
+          maxPosts: EXPORT_HYDRATION_MAX_POSTS,
+          maxComments: EXPORT_HYDRATION_MAX_COMMENTS,
+          postsHydrated: postsDone,
+          commentsHydrated: commentsDone,
+          skipDialogCoverage: true,
+          skipExistingDialogReactions: true,
+        },
+      );
+      if (!target) break;
 
-    const hydrated = await hydrateTarget(tabId, session.id, target, {
-      reactionIds: ALL_REACTION_TYPE_IDS,
-      preferTabRefetch: true,
-      paginate: true,
-      maxPages: EXPORT_HYDRATION_MAX_PAGES_PER_TYPE,
-      delayMin: EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS,
-      delayMax: EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS,
-      recordGaps: true,
-    });
+      const hydrated = await hydrateTarget(tabId, session.id, target, {
+        reactionIds: ALL_REACTION_TYPE_IDS,
+        preferTabRefetch: true,
+        paginate: true,
+        maxPages: EXPORT_HYDRATION_MAX_PAGES_PER_TYPE,
+        delayMin: EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS,
+        delayMax: EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS,
+        recordGaps: true,
+      });
 
-    exportHydrated.add(targetKey(target.kind, target.key));
-    if (target.kind === "post") postsDone += 1;
-    else commentsDone += 1;
+      if (!hydrated) break;
 
-    if (!hydrated) break;
-    await sleep(jitterMs(EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS, EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS));
+      exportHydrated.add(targetKey(target.kind, target.key));
+      if (target.kind === "post") postsDone += 1;
+      else commentsDone += 1;
+
+      await sleep(jitterMs(EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS, EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS));
+    }
+  } finally {
+    state.exportInProgress = false;
   }
 }

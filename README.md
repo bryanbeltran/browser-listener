@@ -9,7 +9,7 @@ Privacy-first Chrome extension for **collecting and organizing Facebook data whi
 - **Reactions** — who reacted to posts (type when available: Like, Love, etc.)
 - **People** — authors and reactors encountered in the session
 
-Planned: reactions on comments, richer reaction types, and pro/anti cause tagging on posts, comments, and reactions.
+Planned: richer reaction capture, local DB ingest for multi-session processing, and pro/anti cause tagging (Trump first) with per-user stance rollup.
 
 All capture is consent-gated, stored locally, and redacted before export. Optional screen/audio/static-body capture remains **off by default** (stubs).
 
@@ -79,12 +79,38 @@ Reload the target tab after install. Open Facebook (group feed, timeline, or a p
 
 ### Roadmap
 
+#### Capture & export (extension)
+
 | Priority | Feature |
 |----------|---------|
 | Next | Comment reactions — who reacted to each comment |
-| Next | Reaction type on all reactors (not only reactions dialog) |
-| Later | Cause tagging — label posts/comments/reactions as pro/anti/neutral on chosen causes |
-| Later | Timeline vs group detection refinements, persistence across sessions |
+| Next | Reaction type on all reactors (not only reactions dialog); expand reaction hydration before export |
+| Next | Classification readiness report — field-level coverage stats in export (`trace-summary` or `coverage-report.json`) |
+| Next | Stable user identity — `authorId` on all posts/comments; include in CSVs |
+| Next | Flat `user-activity` export — one row per post, comment, or reaction for downstream processing |
+| Next | Denormalized reaction context — target author, text snapshot, and post/comment ids on reaction rows |
+| Later | Timeline vs group detection refinements |
+
+#### Processing pipeline (local CLI, outside the extension)
+
+Capture stays **ZIP export only**. A separate local ingest step loads exports into a database for merge, re-runs, and analytics. Raw GraphQL stays in ZIP archives; the DB stores parsed entities and labels.
+
+| Priority | Feature |
+|----------|---------|
+| Next | `ingest export.zip` — idempotent import into local SQLite (or DuckDB) |
+| Next | Multi-session merge — upsert posts, comments, reactions, and people by stable ids across captures |
+| Next | `content_labels` table — store `cause` + pro/anti/neutral stance per post/comment with classifier version |
+| Later | `user_stance` rollup — per-user scores from authored content + reactions to labeled targets |
+| Later | Incremental ingest — process only new exports since last run |
+
+See [docs/architecture.md](docs/architecture.md#classification-pipeline) for the full data flow.
+
+#### Classification (after prerequisites above)
+
+| Priority | Feature |
+|----------|---------|
+| Next | `causeTags` enricher plumbing — schema wired through export; Trump as first `cause` |
+| Later | User stance export artifact (`user-stance.csv`) with confidence and signal counts |
 
 Tips for richer exports: open the full reactions dialog (not just hover tooltip), expand comment threads, and stay on the tab until stop.
 

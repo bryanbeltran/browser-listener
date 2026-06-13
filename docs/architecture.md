@@ -84,16 +84,72 @@ Post
 ├── text, author, media, share info
 ├── linkedReactions[]  → user, reactionType
 └── linkedComments[]   → text, author
-    └── linkedReactions[]  (planned — comment reactors)
+    └── linkedReactions[]  (capture-dependent — see roadmap)
 
 FacebookReaction
-├── target: post | comment (comment not populated yet)
+├── target: post | comment
 ├── postId, commentId?, userId, reactionType?
 └── source query (e.g. CometUFIReactionsDialog)
 ```
 
 **Planned:** `causeTags[]` on posts, comments, and reactions for pro/anti/neutral labeling on chosen causes.
 
+## Classification pipeline
+
+Pro/anti user labeling (e.g. Trump) is a **downstream** concern. The extension captures and exports; a separate local ingest layer merges sessions and runs classifiers. Do **not** put a database inside the extension capture path — `chrome.storage.local` is session-scoped, size-limited, and unsuited to heavy analytics or re-processing.
+
+```mermaid
+flowchart LR
+  subgraph ext [Extension]
+    Capture[Capture]
+    Store[(storage.local)]
+    Export[ZIP export]
+    Capture --> Store --> Export
+  end
+
+  subgraph local [Local processing CLI]
+    Ingest[ingest export.zip]
+    DB[(SQLite / DuckDB)]
+    Classify[Stance classifier]
+    Rollup[User stance rollup]
+    Ingest --> DB --> Classify --> Rollup
+  end
+
+  Export --> Ingest
+  Rollup --> Out[user-stance.csv / reports]
+```
+
+### What the DB stores
+
+| Store in DB | Keep in ZIP only |
+|-------------|------------------|
+| Parsed posts, comments, reactions, people | Raw `graphql-captures.json` (parser debug) |
+| `content_labels` (cause, stance, confidence, classifier version) | Full network archive when not needed for re-parse |
+| Ingest provenance (export checksum, session id, imported at) | — |
+| Optional materialized `user_signals` / `user_stance` | — |
+
+### Phasing
+
+1. **Extension export artifacts** — coverage report, `authorId` in CSVs, flat `user-activity` export, denormalized reaction context.
+2. **Ingest CLI** — idempotent upsert from `group-activity.json` (+ new flat exports) into SQLite.
+3. **Labeling** — write `content_labels` for `cause: "trump"` (rule-based or LLM); reactions inherit stance from labeled targets.
+4. **Rollup** — aggregate per `userId` across all ingested sessions; export `user-stance.csv`.
+
+### Prerequisites before serious classification
+
+| # | Feature | Layer |
+|---|---------|-------|
+| 1 | Classification readiness report (% text, authorId, reaction coverage) | Extension export |
+| 2 | Stable `authorId` in JSON and CSVs | Extension export |
+| 3 | Flat `user-activity` export | Extension export |
+| 4 | Complete post reaction capture (hydration + dialog preference) | Extension capture |
+| 5 | Comment reaction capture | Extension capture |
+| 6 | Denormalized reaction context on export rows | Extension export |
+| 7 | `causeTags` enricher plumbing (generic schema) | Extension enricher |
+| 8 | Content stance classifier (Trump first) | Local CLI |
+| 9 | User stance rollup export | Local CLI |
+| 10 | Multi-session merge via ingest | Local CLI / DB |
+
 ## Extensibility
 
-Register enrichers in `src/enrichers/index.ts`. All registered enrichers run at export time.
+Register enrichers in `src/enrichers/index.ts`. All registered enrichers run at export time. Classification enrichers that need cross-session state belong in the local ingest CLI, not the extension.

@@ -86,6 +86,28 @@ export function backfillAuthorIds(
   };
 }
 
+export function syncLinkedCommentAuthors(
+  posts: FacebookPost[],
+  comments: FacebookComment[],
+): FacebookPost[] {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  return posts.map((post) => {
+    if (!post.linkedComments?.length) return post;
+    return {
+      ...post,
+      linkedComments: post.linkedComments.map((linked) => {
+        const full = byId.get(linked.id);
+        if (!full) return linked;
+        return {
+          ...linked,
+          authorId: full.authorId,
+          authorName: full.authorName,
+        };
+      }),
+    };
+  });
+}
+
 export function enrichReactionContext(
   reactions: FacebookReaction[],
   posts: FacebookPost[],

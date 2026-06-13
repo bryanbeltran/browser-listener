@@ -3,6 +3,7 @@ import {
   backfillAuthorIds,
   dedupePeopleById,
   enrichReactionContext,
+  syncLinkedCommentAuthors,
 } from "../src/enrichers/facebook-identity.js";
 import type { FacebookComment, FacebookPerson, FacebookPost, FacebookReaction } from "../src/shared/types.js";
 
@@ -75,5 +76,23 @@ describe("facebook identity", () => {
     expect(enriched[1]?.targetAuthorId).toBe("8");
     expect(enriched[1]?.targetText).toBe("Reply text");
     expect(enriched[1]?.targetPostId).toBe("100");
+  });
+
+  it("syncs authorId onto nested linkedComments after backfill", () => {
+    const comments: FacebookComment[] = [
+      { id: "cm1", authorName: "Casey Jones", source: "dialog" },
+    ];
+    const people: FacebookPerson[] = [{ id: "42", name: "Casey Jones", source: "x" }];
+    const { comments: filled } = backfillAuthorIds([], comments, people);
+    const posts: FacebookPost[] = [
+      {
+        id: "p1",
+        postId: "100",
+        source: "feed",
+        linkedComments: [{ id: "cm1", authorName: "Casey Jones" }],
+      },
+    ];
+    const synced = syncLinkedCommentAuthors(posts, filled);
+    expect(synced[0]?.linkedComments?.[0]?.authorId).toBe("42");
   });
 });

@@ -2,6 +2,7 @@ import {
   backfillAuthorIds,
   dedupePeopleById,
   enrichReactionContext,
+  syncLinkedCommentAuthors,
 } from "./facebook-identity.js";
 import {
   commentLegacyKey,
@@ -956,9 +957,10 @@ export function extractFacebookGroupActivity(
     linkedComments,
     dedupedPeople,
   );
+  const postsWithSyncedComments = syncLinkedCommentAuthors(postsWithAuthors, commentsWithAuthors);
   const reactionsWithContext = enrichReactionContext(
     mergedReactions,
-    postsWithAuthors,
+    postsWithSyncedComments,
     commentsWithAuthors,
   ).map((r) => ({
     ...r,
@@ -970,7 +972,7 @@ export function extractFacebookGroupActivity(
     groups: [...groups.values()],
     members: [...members.values()],
     people: dedupedPeople,
-    posts: postsWithAuthors,
+    posts: postsWithSyncedComments,
     comments: commentsWithAuthors,
     reactions: reactionsWithContext,
     graphqlQueryHints: [...queryHints.values()].sort((a, b) => b.count - a.count),
