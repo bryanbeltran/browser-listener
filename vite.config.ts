@@ -24,6 +24,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    modulePreload: { polyfill: false },
     rollupOptions: {
       input: {
         background: resolve(__dirname, "src/background/index.ts"),

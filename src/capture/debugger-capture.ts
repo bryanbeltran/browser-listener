@@ -11,6 +11,11 @@ const pendingCdp = new Map<string, Partial<NetworkEntry>>();
 const pendingBodyCaptures = new Set<Promise<void>>();
 let attachedTabId: number | null = null;
 let recoverTimer: ReturnType<typeof setTimeout> | null = null;
+let onDebuggerCanceledByUser: (() => void) | null = null;
+
+export function setOnDebuggerCanceledByUser(handler: (() => void) | null): void {
+  onDebuggerCanceledByUser = handler;
+}
 
 async function sessionTab(): Promise<number | null> {
   const s = await getActiveSession();
@@ -137,7 +142,7 @@ export function registerDebuggerCapture(): void {
     void recordHealthGap(`debugger_detach: ${reason}`);
 
     if (reason === "canceled_by_user") {
-      void import("./stop-export.js").then((m) => m.stopAndExportInBackground());
+      onDebuggerCanceledByUser?.();
       return;
     }
 

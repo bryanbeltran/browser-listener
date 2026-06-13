@@ -1,8 +1,14 @@
 import { redactDeep } from "../redaction/engine.js";
 import {
+  ingestNetworkEntry,
+  rebuildHydrationIndex,
+  resetHydrationIndex,
+} from "../capture/hydration-index.js";
+import {
   buildPopupStateSnapshot,
   emptyPopupStateSnapshot,
   POPUP_STATE_KEY,
+  popupStateFromSnapshot,
 } from "./popup-state.js";
 import { emptyTruncation, estimateNetworkEntryBytes, totalNetworkBytes } from "./limits.js";
 import {
@@ -20,10 +26,6 @@ import type {
   SessionData,
 } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
-import {
-  buildPopupStateSnapshot,
-  popupStateFromSnapshot,
-} from "./popup-state.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
@@ -247,12 +249,11 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
     const result = await putNetworkEntries(session.id, redactedNetwork, stats.bytes);
     truncated = result.truncated;
     applyEvictedEntries(session.id, result.evicted);
-    const hydration = await import("../capture/hydration-index.js");
     for (const entry of redactedNetwork) {
-      hydration.ingestNetworkEntry(entry, session.tabUrl);
+      ingestNetworkEntry(entry, session.tabUrl);
     }
     if (result.evicted.length > 0) {
-      await hydration.rebuildHydrationIndex(session.id, session.tabUrl);
+      await rebuildHydrationIndex(session.id, session.tabUrl);
     }
   }
 
@@ -403,11 +404,10 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   const nextStats = applyEntryStats(meta.session.id, redacted, result.previous, result.isNew);
   applyEvictedEntries(meta.session.id, result.evicted);
 
-  const hydration = await import("../capture/hydration-index.js");
   if (result.evicted.length > 0) {
-    await hydration.rebuildHydrationIndex(meta.session.id, meta.session.tabUrl);
+    await rebuildHydrationIndex(meta.session.id, meta.session.tabUrl);
   } else {
-    hydration.ingestNetworkEntry(redacted, meta.session.tabUrl);
+    ingestNetworkEntry(redacted, meta.session.tabUrl);
   }
 
   let session = meta.session;
@@ -436,7 +436,6 @@ export async function clearSessionData(): Promise<void> {
   } else {
     resetCaptureStats();
   }
-  const { resetHydrationIndex } = await import("../capture/hydration-index.js");
   resetHydrationIndex();
   await flushPopupSnapshot();
   await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);

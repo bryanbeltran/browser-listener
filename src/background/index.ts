@@ -4,10 +4,11 @@ import {
   attachDebugger,
   ensureDebuggerForSession,
   registerDebuggerCapture,
+  setOnDebuggerCanceledByUser,
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
 import { registerReactionHydrationListeners, resetReactionHydrationScheduler } from "../capture/reaction-hydration.js";
-import { stopCaptureAndPrepareZip } from "../capture/stop-export.js";
+import { stopAndExportInBackground, stopCaptureAndPrepareZip } from "../capture/stop-export.js";
 import { uint8ToBase64 } from "../shared/bytes.js";
 import {
   clearSessionData,
@@ -35,6 +36,7 @@ async function startWithConsent(
 }
 
 registerDebuggerCapture();
+setOnDebuggerCanceledByUser(() => void stopAndExportInBackground());
 registerWebRequestCapture();
 registerTabLifecycle();
 registerReactionHydrationListeners();
