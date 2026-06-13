@@ -222,6 +222,53 @@ describe("facebook groups enricher", () => {
     expect(activity.posts.some((p) => p.partialParse)).toBe(false);
   });
 
+  it("extracts counts from nested UFI feedback when story.feedback is shallow", () => {
+    const postFeedbackId = btoa("feedback:26939693175658491");
+    const responseBody = JSON.stringify({
+      data: {
+        __typename: "Story",
+        id: "UzpfTest",
+        post_id: "26939693175658491",
+        message: { text: "Free Moving Boxes - wardrobe boxes" },
+        feedback: {
+          id: postFeedbackId,
+          owning_profile: { __typename: "User", name: "Jamie Lindstrom Gearig", id: "544234076" },
+        },
+        actors: [{ id: "544234076", name: "Jamie Lindstrom Gearig" }],
+        comet_ufi_summary_and_actions_renderer: {
+          __typename: "DefaultCometUFISummaryAndActionsRenderer",
+          feedback: {
+            id: postFeedbackId,
+            subscription_target_id: "26939693175658491",
+            reaction_count: { count: 9, is_empty: false },
+            comment_rendering_instance: {
+              comments: { total_count: 10 },
+            },
+          },
+        },
+      },
+    });
+    const entry: NetworkEntry = {
+      id: "n-ufi-counts",
+      sessionId: "fixture",
+      requestId: "req-ufi-counts",
+      timestamp: Date.now(),
+      url: "https://www.facebook.com/api/graphql/",
+      method: "POST",
+      type: "xhr",
+      statusCode: 200,
+      requestBody:
+        "fb_api_req_friendly_name=GroupsCometFeedRegularStoriesPaginationQuery&doc_id=1",
+      responseBody,
+      bodyCaptured: true,
+    };
+
+    const activity = extractFacebookGroupActivity([entry], { tabUrl: GROUP_FEED });
+    const post = activity.posts.find((p) => p.postId === "26939693175658491");
+    expect(post?.reactionCount).toBe(9);
+    expect(post?.commentCount).toBe(10);
+  });
+
   it("drops partial posts when a full post matches by text", () => {
     const postText =
       "China cabinet for free. Items shown inside the cabinet are not included.";

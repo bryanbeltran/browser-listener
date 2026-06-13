@@ -36,8 +36,82 @@ export function feedbackCounts(feedback: unknown): {
   const commentCount =
     countFromFeedbackField(fb.comment_count) ??
     countFromFeedbackField(fb.total_comment_count) ??
-    countFromFeedbackField(fb.comments_count);
+    countFromFeedbackField(fb.comments_count) ??
+    countFromCommentRenderingInstance(fb.comment_rendering_instance);
   return { reactionCount, commentCount };
+}
+
+function countFromCommentRenderingInstance(field: unknown): number | undefined {
+  if (!field || typeof field !== "object") return undefined;
+  const comments = (field as { comments?: unknown }).comments;
+  return countFromFeedbackField(comments);
+}
+
+export interface FeedbackCountTotals {
+  reactionCount?: number;
+  commentCount?: number;
+}
+
+export type FeedbackCountIndex = Map<string, FeedbackCountTotals>;
+
+function mergeFeedbackCountTotals(
+  existing: FeedbackCountTotals,
+  incoming: FeedbackCountTotals,
+): FeedbackCountTotals {
+  const reactionCount =
+    existing.reactionCount != null && incoming.reactionCount != null
+      ? Math.max(existing.reactionCount, incoming.reactionCount)
+      : existing.reactionCount ?? incoming.reactionCount;
+  const commentCount =
+    existing.commentCount != null && incoming.commentCount != null
+      ? Math.max(existing.commentCount, incoming.commentCount)
+      : existing.commentCount ?? incoming.commentCount;
+  return { reactionCount, commentCount };
+}
+
+function isFeedbackId(id: string): boolean {
+  if (id.startsWith("feedback:")) return true;
+  try {
+    return atob(id).startsWith("feedback:");
+  } catch {
+    return false;
+  }
+}
+
+/** Index reaction/comment totals from any nested feedback-shaped GraphQL node. */
+export function recordFeedbackCounts(
+  node: Record<string, unknown>,
+  index: FeedbackCountIndex,
+): void {
+  const id = typeof node.id === "string" ? node.id : undefined;
+  if (!id || !isFeedbackId(id)) return;
+  const counts = feedbackCounts(node);
+  if (counts.reactionCount == null && counts.commentCount == null) return;
+  const existing = index.get(id) ?? {};
+  index.set(id, mergeFeedbackCountTotals(existing, counts));
+}
+
+export function applyFeedbackCountIndex(
+  posts: { feedbackId?: string; reactionCount?: number; commentCount?: number }[],
+  index: FeedbackCountIndex,
+): void {
+  for (const post of posts) {
+    if (!post.feedbackId) continue;
+    const indexed = index.get(post.feedbackId);
+    if (!indexed) continue;
+    if (indexed.reactionCount != null) {
+      post.reactionCount =
+        post.reactionCount != null
+          ? Math.max(post.reactionCount, indexed.reactionCount)
+          : indexed.reactionCount;
+    }
+    if (indexed.commentCount != null) {
+      post.commentCount =
+        post.commentCount != null
+          ? Math.max(post.commentCount, indexed.commentCount)
+          : indexed.commentCount;
+    }
+  }
 }
 
 export function decodeFeedbackPostId(feedbackId?: string): string | undefined {

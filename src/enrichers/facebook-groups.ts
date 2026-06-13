@@ -7,6 +7,9 @@ import {
   extractMediaFromAttachments,
   extractStoryTextsFromPartialJson,
   feedbackCounts,
+  recordFeedbackCounts,
+  applyFeedbackCountIndex,
+  type FeedbackCountIndex,
   groupMemberCountText,
   groupPermalinkUrl,
   inferFacebookSurface,
@@ -187,8 +190,14 @@ function mergePosts(primary: FacebookPost, secondary: FacebookPost): FacebookPos
     url: richer.url ?? other.url,
     feedbackId: richer.feedbackId ?? other.feedbackId,
     partialParse: Boolean(richer.partialParse && other.partialParse),
-    reactionCount: richer.reactionCount ?? other.reactionCount,
-    commentCount: richer.commentCount ?? other.commentCount,
+    reactionCount:
+      richer.reactionCount != null && other.reactionCount != null
+        ? Math.max(richer.reactionCount, other.reactionCount)
+        : richer.reactionCount ?? other.reactionCount,
+    commentCount:
+      richer.commentCount != null && other.commentCount != null
+        ? Math.max(richer.commentCount, other.commentCount)
+        : richer.commentCount ?? other.commentCount,
     media: mergeMedia(other.media, richer.media),
     share: mergeShare(other.share, richer.share),
     createdAt: richer.createdAt ?? other.createdAt,
@@ -532,6 +541,7 @@ export function extractFacebookGroupActivity(
   const members = new Map<string, FacebookGroupMember>();
   const people = new Map<string, FacebookPerson>();
   const reactionNames = new Map<string, string>();
+  const feedbackCountIndex: FeedbackCountIndex = new Map();
   const posts = new Map<string, FacebookPost>();
   const comments = new Map<string, FacebookComment>();
   const commentKeys = new Map<string, string>();
@@ -685,6 +695,7 @@ export function extractFacebookGroupActivity(
     for (const root of parsed) {
       walk(root, (node) => {
         collectReactionNames(node, reactionNames);
+        recordFeedbackCounts(node, feedbackCountIndex);
 
         const hovercard = node.comet_hovercard_renderer;
         if (hovercard && typeof hovercard === "object") {
@@ -892,11 +903,13 @@ export function extractFacebookGroupActivity(
     }
   }
 
+  const postList = [...posts.values()];
+  applyFeedbackCountIndex(postList, feedbackCountIndex);
   const { reactions: mergedReactions, hints: reactionHints } = consolidateReactions(
     backfillReactionTypes(reactions),
   );
   const linkedComments = linkCommentsToReactions([...comments.values()], mergedReactions);
-  const dedupedPosts = dedupePartialPosts(dedupePostsByPostId([...posts.values()]));
+  const dedupedPosts = dedupePartialPosts(dedupePostsByPostId(postList));
   const linkedPosts = attachPostContext(
     linkPosts(dedupedPosts, mergedReactions, linkedComments),
     [...groups.values()],

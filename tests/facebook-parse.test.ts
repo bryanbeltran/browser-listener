@@ -7,6 +7,8 @@ import {
   extractMediaFromAttachments,
   extractStoryTextsFromPartialJson,
   feedbackCounts,
+  recordFeedbackCounts,
+  applyFeedbackCountIndex,
   groupMemberCountText,
   inferFacebookSurface,
   isNoisePostText,
@@ -165,5 +167,27 @@ describe("facebook parse helpers", () => {
       reactionCount: 1,
       commentCount: undefined,
     });
+    expect(
+      feedbackCounts({
+        comment_rendering_instance: { comments: { total_count: 10 } },
+      }),
+    ).toEqual({ reactionCount: undefined, commentCount: 10 });
+  });
+
+  it("indexes nested feedback counts by feedback id", () => {
+    const feedbackId = btoa("feedback:26939693175658491");
+    const index = new Map();
+    recordFeedbackCounts(
+      {
+        id: feedbackId,
+        reaction_count: { count: 9 },
+        comment_rendering_instance: { comments: { total_count: 10 } },
+      },
+      index,
+    );
+    const posts = [{ feedbackId, reactionCount: undefined, commentCount: undefined }];
+    applyFeedbackCountIndex(posts, index);
+    expect(posts[0].reactionCount).toBe(9);
+    expect(posts[0].commentCount).toBe(10);
   });
 });
