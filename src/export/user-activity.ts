@@ -1,12 +1,12 @@
 import type { FacebookGroupActivity, FacebookUserActivitySignal } from "../shared/types.js";
 
-function escCsv(value: string | number | undefined): string {
+function escCsv(value: string | number | undefined | boolean): string {
   const s = value == null ? "" : String(value);
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
 
-function toCsv(headers: string[], rows: (string | number | undefined)[][]): string {
+function toCsv(headers: string[], rows: (string | number | undefined | boolean)[][]): string {
   const lines = [headers.map(escCsv).join(",")];
   for (const row of rows) lines.push(row.map(escCsv).join(","));
   return `${lines.join("\n")}\n`;
@@ -22,6 +22,7 @@ export function buildUserActivitySignals(
     signals.push({
       userId: post.authorId,
       userName: post.authorName,
+      userIdResolved: Boolean(post.authorId),
       actionType: "post",
       targetId: post.postId ?? post.id,
       targetType: "post",
@@ -36,6 +37,7 @@ export function buildUserActivitySignals(
     signals.push({
       userId: comment.authorId,
       userName: comment.authorName,
+      userIdResolved: Boolean(comment.authorId),
       actionType: "comment",
       targetId: comment.id,
       targetType: "comment",
@@ -50,6 +52,7 @@ export function buildUserActivitySignals(
     signals.push({
       userId: reaction.userId,
       userName: reaction.userName,
+      userIdResolved: Boolean(reaction.userId),
       actionType: "reaction",
       targetId:
         reaction.target === "comment" ? reaction.commentId : reaction.postId,
@@ -65,11 +68,19 @@ export function buildUserActivitySignals(
   return signals;
 }
 
+/** Signals with stable userId only — safe for user-level rollup. */
+export function buildResolvedUserActivitySignals(
+  activity: FacebookGroupActivity,
+): FacebookUserActivitySignal[] {
+  return buildUserActivitySignals(activity).filter((s) => s.userIdResolved);
+}
+
 export function buildUserActivityCsv(activity: FacebookGroupActivity): string {
   const signals = buildUserActivitySignals(activity);
   return toCsv(
     [
       "userId",
+      "userIdResolved",
       "userName",
       "actionType",
       "targetId",
@@ -82,6 +93,7 @@ export function buildUserActivityCsv(activity: FacebookGroupActivity): string {
     ],
     signals.map((s) => [
       s.userId,
+      s.userIdResolved ? "yes" : "no",
       s.userName,
       s.actionType,
       s.targetId,
@@ -97,4 +109,8 @@ export function buildUserActivityCsv(activity: FacebookGroupActivity): string {
 
 export function buildUserActivityJson(activity: FacebookGroupActivity): string {
   return JSON.stringify(buildUserActivitySignals(activity), null, 2);
+}
+
+export function buildResolvedUserActivityJson(activity: FacebookGroupActivity): string {
+  return JSON.stringify(buildResolvedUserActivitySignals(activity), null, 2);
 }

@@ -130,25 +130,49 @@ flowchart LR
 
 ### Phasing
 
-1. **Extension export artifacts** — coverage report, `authorId` in CSVs, flat `user-activity` export, denormalized reaction context.
-2. **Ingest CLI** — idempotent upsert from `group-activity.json` (+ new flat exports) into SQLite.
-3. **Labeling** — write `content_labels` for `cause: "trump"` (rule-based or LLM); reactions inherit stance from labeled targets.
-4. **Rollup** — aggregate per `userId` across all ingested sessions; export `user-stance.csv`.
+1. ~~**Extension export artifacts**~~ — `authorId` in CSVs, flat `user-activity` export, denormalized reaction context *(done)*.
+2. **Blocking workstreams (1–4)** — stance labeling, processing pipeline, coverage report, capture completeness.
+3. **Ingest CLI** — idempotent upsert from `group-activity.json` (+ flat exports) into SQLite.
+4. **Labeling** — write `content_labels` for `cause: "trump"`; reactions inherit stance from labeled targets.
+5. **Rollup** — aggregate per `userId` across all ingested sessions; export `user-stance.csv`.
+
+### Blocking workstreams
+
+| # | Workstream | Layer | Status |
+|---|------------|-------|--------|
+| **1** | Stance labeling — `causeTags` plumbing, Trump classifier, `content_labels` | Local CLI + export schema | Not started |
+| **2** | Processing pipeline — ingest, multi-session merge, `user_stance` rollup | Local CLI / DB | Not started |
+| **3** | Classification readiness report — `coverage-report.json` with field-level stats | Extension export | Not started |
+| **4** | Capture completeness — reaction gaps, `partialParse`, truncation visibility | Extension capture | Partial (hydration exists; gaps remain) |
 
 ### Prerequisites before serious classification
 
-| # | Feature | Layer |
-|---|---------|-------|
-| 1 | Classification readiness report (% text, authorId, reaction coverage) | Extension export |
-| 2 | Stable `authorId` in JSON and CSVs | Extension export |
-| 3 | Flat `user-activity` export | Extension export |
-| 4 | Complete post reaction capture (hydration + dialog preference) | Extension capture |
-| 5 | Comment reaction capture | Extension capture |
-| 6 | Denormalized reaction context on export rows | Extension export |
-| 7 | `causeTags` enricher plumbing (generic schema) | Extension enricher |
-| 8 | Content stance classifier (Trump first) | Local CLI |
-| 9 | User stance rollup export | Local CLI |
-| 10 | Multi-session merge via ingest | Local CLI / DB |
+| # | Feature | Layer | Status |
+|---|---------|-------|--------|
+| 1 | Classification readiness report (% text, authorId, reaction coverage) | Extension export | Not started |
+| 2 | Stable `authorId` in JSON and CSVs | Extension export | Done |
+| 3 | Flat `user-activity` export | Extension export | Done |
+| 4 | Complete post reaction capture (hydration + dialog preference) | Extension capture | Partial |
+| 5 | Comment reaction capture | Extension capture | Partial |
+| 6 | Denormalized reaction context on export rows | Extension export | Done |
+| 7 | `causeTags` enricher plumbing (generic schema) | Extension enricher | Not started |
+| 8 | Content stance classifier (Trump first) | Local CLI | Not started |
+| 9 | User stance rollup export | Local CLI | Not started |
+| 10 | Multi-session merge via ingest | Local CLI / DB | Not started |
+
+### Capture completeness (#4)
+
+Reaction-based classification needs both **who reacted** and **what they reacted to** (`targetText`). Current gaps:
+
+| Gap | Cause | Planned fix |
+|-----|-------|-------------|
+| Tooltip-only post reactors | User hovered Like count; full dialog not opened | Export hydration uses `CometUFIReactionsDialogTabContentRefetchQuery` with `ALL_REACTION_TYPE_IDS` + pagination |
+| Missing comment reactors | Comment `feedbackId` not in capture; comment not hydration target | `selectNextCommentForHydration` + export pass budgets for comments |
+| `reactionType` missing | Tooltip rows lack per-user type | `backfillReactionTypes` peers dialog rows onto tooltip rows |
+| `targetText` missing on reactions | Post/comment not captured or `partialParse` | Prioritize hydration for reactions lacking `targetText`; improve partial JSON text extraction |
+| Truncated network buffer | >10k GraphQL rows dropped | Surface in `coverage-report.json`; optionally raise cap or spill to IndexedDB |
+
+Hydration already runs in two phases: slow session sampling (`SAMPLE_REACTION_TYPE_IDS`) and a final `runExportReactionHydration` pass before ZIP. Remaining work is **coverage-driven target selection** (hydrate under-covered content first), **budget tuning** tied to coverage metrics, and **paginating until `captured >= reactionCount`** per target.
 
 ## Extensibility
 

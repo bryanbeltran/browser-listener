@@ -2,6 +2,7 @@ import type { FacebookGroupActivity } from "../shared/types.js";
 import {
   buildUserActivityCsv,
   buildUserActivityJson,
+  buildResolvedUserActivityJson,
 } from "./user-activity.js";
 
 function escCsv(value: string | number | undefined): string {
@@ -134,6 +135,7 @@ export function buildFacebookCsvFiles(
   ) {
     files["csv/user-activity.csv"] = buildUserActivityCsv(activity);
     files["signals.json"] = buildUserActivityJson(activity);
+    files["signals-resolved.json"] = buildResolvedUserActivityJson(activity);
   }
 
   return files;

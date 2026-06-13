@@ -1,4 +1,4 @@
-import { extractFacebookGroupActivity } from "../enrichers/facebook-groups.js";
+import { activityForHydration, invalidateHydrationSnapshot } from "./hydration-snapshot.js";
 import {
   ALL_REACTION_TYPE_IDS,
   isDialogReactionSource,
@@ -25,19 +25,23 @@ import type {
 
 export const SESSION_HYDRATION_MAX_POSTS = 8;
 export const SESSION_HYDRATION_MAX_COMMENTS = 5;
-export const EXPORT_HYDRATION_MAX_POSTS = 25;
-export const EXPORT_HYDRATION_MAX_COMMENTS = 15;
+export const EXPORT_HYDRATION_MAX_POSTS = 12;
+export const EXPORT_HYDRATION_MAX_COMMENTS = 8;
+export const EXPORT_HYDRATION_MAX_MS = 45_000;
+export const EXPORT_HYDRATION_MAX_REQUESTS = 36;
 export const REACTION_HYDRATION_MAX_POSTS = SESSION_HYDRATION_MAX_POSTS;
 export const REACTION_HYDRATION_DEBOUNCE_MS = 8_000;
 export const REACTION_HYDRATION_ACTIVITY_WINDOW_MS = 60_000;
 export const REACTION_HYDRATION_REQUEST_DELAY_MIN_MS = 2_000;
 export const REACTION_HYDRATION_REQUEST_DELAY_MAX_MS = 5_000;
-export const EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS = 400;
-export const EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS = 800;
+export const EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS = 2_000;
+export const EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS = 5_000;
+export const EXPORT_HYDRATION_TARGET_COOLDOWN_MIN_MS = 3_000;
+export const EXPORT_HYDRATION_TARGET_COOLDOWN_MAX_MS = 8_000;
 export const REACTION_HYDRATION_POST_COOLDOWN_MIN_MS = 45_000;
 export const REACTION_HYDRATION_POST_COOLDOWN_MAX_MS = 90_000;
 export const REACTION_HYDRATION_INACTIVE_RETRY_MS = 15_000;
-export const EXPORT_HYDRATION_MAX_PAGES_PER_TYPE = 10;
+export const EXPORT_HYDRATION_MAX_PAGES_PER_TYPE = 3;
 export const TAB_CONTENT_REFETCH_QUERY = "CometUFIReactionsDialogTabContentRefetchQuery";
 export const TOOLTIP_REACTION_QUERY = "CometUFIReactionIconTooltipContentQuery";
 
@@ -105,6 +109,7 @@ export function resetReactionHydrationScheduler(): void {
   if (retryTimer) clearTimeout(retryTimer);
   debounceTimer = null;
   retryTimer = null;
+  invalidateHydrationSnapshot();
 }
 
 export function markReactionHydrationOrganicActivity(): void {
@@ -132,24 +137,17 @@ function targetKey(kind: HydrationTargetKind, id: string): string {
   return `${kind}:${id}`;
 }
 
-function postHasDialogCoverage(
+function postHasSufficientDialogCoverage(
   postId: string | undefined,
   reactions: FacebookReaction[],
-  requiredTypeNames: readonly string[],
 ): boolean {
-  if (!postId || requiredTypeNames.length === 0) return false;
-  const types = new Set(
-    reactions
-      .filter(
-        (r) =>
-          r.postId === postId &&
-          r.target !== "comment" &&
-          isDialogReactionSource(r.source) &&
-          r.reactionType,
-      )
-      .map((r) => r.reactionType!),
+  if (!postId) return false;
+  return reactions.some(
+    (r) =>
+      r.postId === postId &&
+      r.target !== "comment" &&
+      isDialogReactionSource(r.source),
   );
-  return requiredTypeNames.every((name) => types.has(name));
 }
 
 export function postHydrationScore(
@@ -191,7 +189,7 @@ export function selectNextPostForHydration(
     .filter(
       (p) =>
         opts.skipDialogCoverage ||
-        !postHasDialogCoverage(p.postId, reactions, Object.keys(SAMPLE_REACTION_TYPE_IDS)),
+        !postHasSufficientDialogCoverage(p.postId, reactions),
     )
     .map((p) => ({
       post: p,
@@ -393,6 +391,7 @@ async function storeHydrationResponse(
     bodyCaptured: true,
   };
   await upsertNetwork(entry);
+  invalidateHydrationSnapshot();
 }
 
 async function fetchReactionType(
@@ -407,12 +406,15 @@ async function fetchReactionType(
     maxPages: number;
     delayMin: number;
     delayMax: number;
+    onRequest?: () => boolean;
   },
 ): Promise<number> {
   let successes = 0;
   let cursor: string | null = null;
 
   for (let page = 0; page < opts.maxPages; page++) {
+    if (opts.onRequest && !opts.onRequest()) break;
+
     const variables = plan.useTabRefetch
       ? tabContentRefetchVariables(feedbackId, reactionId, cursor)
       : tooltipReactionVariables(feedbackId, reactionId);
@@ -452,6 +454,7 @@ async function hydrateTarget(
     delayMin: number;
     delayMax: number;
     recordGaps: boolean;
+    onRequest?: () => boolean;
   },
 ): Promise<boolean> {
   const data = await readSessionData();
@@ -475,6 +478,7 @@ async function hydrateTarget(
 
   let successes = 0;
   for (const reactionId of opts.reactionIds) {
+    if (opts.onRequest && !opts.onRequest()) break;
     if (!(await tabReadyForHydration(tabId, false))) return successes > 0;
     successes += await fetchReactionType(
       tabId,
@@ -488,6 +492,7 @@ async function hydrateTarget(
         maxPages: opts.maxPages,
         delayMin: opts.delayMin,
         delayMax: opts.delayMax,
+        onRequest: opts.onRequest,
       },
     );
     await sleep(jitterMs(opts.delayMin, opts.delayMax));
@@ -579,7 +584,7 @@ async function runReactionHydrationCycle(tabId: number): Promise<void> {
   state.running = true;
   try {
     const data = await readSessionData();
-    const activity = extractFacebookGroupActivity(data.network, { tabUrl: session.tabUrl });
+    const activity = activityForHydration(data.network, session.tabUrl);
     const target = selectNextHydrationTarget(
       activity.posts,
       activity.comments,
@@ -643,11 +648,32 @@ export async function runExportReactionHydration(tabId: number): Promise<void> {
   const exportHydrated = new Set<string>();
   let postsDone = 0;
   let commentsDone = 0;
+  const startedAt = Date.now();
+  let requests = 0;
+  let budgetExhausted = false;
+
+  const consumeExportBudget = (): boolean => {
+    if (Date.now() - startedAt >= EXPORT_HYDRATION_MAX_MS) {
+      budgetExhausted = true;
+      return false;
+    }
+    if (requests >= EXPORT_HYDRATION_MAX_REQUESTS) {
+      budgetExhausted = true;
+      return false;
+    }
+    requests += 1;
+    return true;
+  };
 
   try {
     while (postsDone < EXPORT_HYDRATION_MAX_POSTS || commentsDone < EXPORT_HYDRATION_MAX_COMMENTS) {
+      if (Date.now() - startedAt >= EXPORT_HYDRATION_MAX_MS) {
+        budgetExhausted = true;
+        break;
+      }
+
       const data = await readSessionData();
-      const activity = extractFacebookGroupActivity(data.network, { tabUrl: session.tabUrl });
+      const activity = activityForHydration(data.network, session.tabUrl);
       const target = selectNextHydrationTarget(
         activity.posts,
         activity.comments,
@@ -674,6 +700,7 @@ export async function runExportReactionHydration(tabId: number): Promise<void> {
         delayMin: EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS,
         delayMax: EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS,
         recordGaps: true,
+        onRequest: consumeExportBudget,
       });
 
       if (!hydrated) break;
@@ -682,7 +709,15 @@ export async function runExportReactionHydration(tabId: number): Promise<void> {
       if (target.kind === "post") postsDone += 1;
       else commentsDone += 1;
 
-      await sleep(jitterMs(EXPORT_HYDRATION_REQUEST_DELAY_MIN_MS, EXPORT_HYDRATION_REQUEST_DELAY_MAX_MS));
+      await sleep(
+        jitterMs(EXPORT_HYDRATION_TARGET_COOLDOWN_MIN_MS, EXPORT_HYDRATION_TARGET_COOLDOWN_MAX_MS),
+      );
+    }
+
+    if (budgetExhausted) {
+      await recordHealthGap(
+        `reaction_hydration: export budget reached (${requests} requests, ${Date.now() - startedAt}ms)`,
+      );
     }
   } finally {
     state.exportInProgress = false;

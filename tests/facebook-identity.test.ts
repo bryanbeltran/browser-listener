@@ -27,7 +27,9 @@ describe("facebook identity", () => {
     const comments: FacebookComment[] = [
       { id: "c1", authorName: "casey jones", source: "dialog" },
     ];
-    const { posts: outPosts, comments: outComments } = backfillAuthorIds(posts, comments, people);
+    const { posts: outPosts, comments: outComments } = backfillAuthorIds(posts, comments, {
+      people,
+    });
     expect(outPosts[0]?.authorId).toBe("42");
     expect(outComments[0]?.authorId).toBe("42");
   });
@@ -83,7 +85,7 @@ describe("facebook identity", () => {
       { id: "cm1", authorName: "Casey Jones", source: "dialog" },
     ];
     const people: FacebookPerson[] = [{ id: "42", name: "Casey Jones", source: "x" }];
-    const { comments: filled } = backfillAuthorIds([], comments, people);
+    const { comments: filled } = backfillAuthorIds([], comments, { people });
     const posts: FacebookPost[] = [
       {
         id: "p1",
@@ -94,5 +96,21 @@ describe("facebook identity", () => {
     ];
     const synced = syncLinkedCommentAuthors(posts, filled);
     expect(synced[0]?.linkedComments?.[0]?.authorId).toBe("42");
+  });
+
+  it("backfills authorId from group member when name is unique", () => {
+    const posts: FacebookPost[] = [{ id: "p1", authorName: "Member Only", source: "feed" }];
+    const { posts: outPosts } = backfillAuthorIds(posts, [], {
+      people: [],
+      members: [{ userId: "99", name: "Member Only" }],
+    });
+    expect(outPosts[0]?.authorId).toBe("99");
+  });
+
+  it("accepts legacy people[] argument for backward compatibility", () => {
+    const people: FacebookPerson[] = [{ id: "42", name: "Casey Jones", source: "x" }];
+    const posts: FacebookPost[] = [{ id: "p1", authorName: "Casey Jones", source: "feed" }];
+    const { posts: outPosts } = backfillAuthorIds(posts, [], people);
+    expect(outPosts[0]?.authorId).toBe("42");
   });
 });

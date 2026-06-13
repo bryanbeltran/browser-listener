@@ -19,17 +19,20 @@ export function isFacebookGraphqlUrl(url: string): boolean {
   }
 }
 
-/** Most recent facebook.com GraphQL POST form fields (session + routing tokens). */
+/** Most recent organic (non-hydration) GraphQL POST form fields. */
 export function findGraphqlRequestTemplate(network: NetworkEntry[]): Record<string, string> | null {
+  let best: { timestamp: number; form: Record<string, string> } | null = null;
   for (let i = network.length - 1; i >= 0; i--) {
     const entry = network[i];
     if (!isFacebookGraphqlUrl(entry.url)) continue;
     if (entry.method !== "POST") continue;
+    if (entry.requestId?.startsWith("hydrate-")) continue;
     const form = parseGraphqlFormBody(entry.requestBody);
     if (!form.fb_dtsg && !form.lsd) continue;
-    return { ...form };
+    const candidate = { timestamp: entry.timestamp, form: { ...form } };
+    if (!best || candidate.timestamp > best.timestamp) best = candidate;
   }
-  return null;
+  return best?.form ?? null;
 }
 
 export function findGraphqlDocId(network: NetworkEntry[], friendlyName: string): string | undefined {

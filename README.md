@@ -79,19 +79,34 @@ Reload the target tab after install. Open Facebook (group feed, timeline, or a p
 
 ### Roadmap
 
-#### Capture & export (extension)
+#### Done — extension export prep
+
+| Feature |
+|---------|
+| `authorId` on posts/comments in JSON and CSVs |
+| Flat `csv/user-activity.csv`, `signals.json`, `signals-resolved.json` |
+| Denormalized reaction context (`targetAuthorId`, `targetText`, `targetPostId`) |
+| Author ID backfill + people dedupe (`facebook-identity.ts`) |
+| Export-time reaction hydration pass (`runExportReactionHydration` before ZIP) |
+
+#### Blocking — before confident pro/anti user classification
+
+| # | Workstream | Layer | Priority |
+|---|------------|-------|----------|
+| **1** | **Stance labeling** — `causeTags` enricher plumbing; Trump content classifier; write `content_labels` (cause, stance, confidence, classifier version); reactions inherit stance from labeled targets | Local CLI + export schema | Next |
+| **2** | **Processing pipeline** — `ingest export.zip` into local SQLite/DuckDB; multi-session merge by stable ids; `user_stance` rollup export with confidence and signal counts; incremental ingest | Local CLI | Next |
+| **3** | **Classification readiness report** — field-level coverage in export (`coverage-report.json`): % posts/comments with `text` and `authorId`, % reactions with `targetText` and `reactionType`, tooltip vs dialog capture, `partialParse` and truncation gaps | Extension export | Next |
+| **4** | **Capture completeness** — close reaction gaps (post + comment), reduce `partialParse`, surface truncation in coverage report; see [Capture completeness](#capture-completeness) below | Extension capture | Next |
+
+#### Capture & export (extension — supports #4)
 
 | Priority | Feature |
 |----------|---------|
-| Next | Comment reactions — who reacted to each comment |
-| Next | Reaction type on all reactors (not only reactions dialog); expand reaction hydration before export |
-| Next | Classification readiness report — field-level coverage stats in export (`trace-summary` or `coverage-report.json`) |
-| Next | Stable user identity — `authorId` on all posts/comments; include in CSVs |
-| Next | Flat `user-activity` export — one row per post, comment, or reaction for downstream processing |
-| Next | Denormalized reaction context — target author, text snapshot, and post/comment ids on reaction rows |
+| Next | Comment reactions — full reactor lists on comments (not only organic dialog capture) |
+| Next | Reaction type on all reactors — expand session + export hydration budgets; paginate until `reactionCount` met |
 | Later | Timeline vs group detection refinements |
 
-#### Processing pipeline (local CLI, outside the extension)
+#### Processing pipeline (local CLI — supports #2)
 
 Capture stays **ZIP export only**. A separate local ingest step loads exports into a database for merge, re-runs, and analytics. Raw GraphQL stays in ZIP archives; the DB stores parsed entities and labels.
 
@@ -100,17 +115,28 @@ Capture stays **ZIP export only**. A separate local ingest step loads exports in
 | Next | `ingest export.zip` — idempotent import into local SQLite (or DuckDB) |
 | Next | Multi-session merge — upsert posts, comments, reactions, and people by stable ids across captures |
 | Next | `content_labels` table — store `cause` + pro/anti/neutral stance per post/comment with classifier version |
-| Later | `user_stance` rollup — per-user scores from authored content + reactions to labeled targets |
+| Next | `user_stance` rollup — per-user scores from authored content + reactions to labeled targets |
 | Later | Incremental ingest — process only new exports since last run |
 
 See [docs/architecture.md](docs/architecture.md#classification-pipeline) for the full data flow.
 
-#### Classification (after prerequisites above)
+#### Classification (supports #1)
 
 | Priority | Feature |
 |----------|---------|
-| Next | `causeTags` enricher plumbing — schema wired through export; Trump as first `cause` |
-| Later | User stance export artifact (`user-stance.csv`) with confidence and signal counts |
+| Next | `causeTags` on posts/comments in `group-activity.json`; Trump as first `cause` |
+| Next | User stance export artifact (`user-stance.csv`) with confidence and signal counts |
+
+### Capture completeness
+
+Gaps that block reliable reaction-based classification (#4 on the blocking list):
+
+- Post reactions often tooltip-only unless the reactions dialog was opened or hydration ran
+- Comment reactors sparse unless comment `feedbackId` was captured and hydration targeted the comment
+- `partialParse` posts and comment threads missing text
+- Network ring buffer truncation (`health.truncation.network`) drops GraphQL bodies
+
+**Planned fixes:** coverage-driven hydration (prioritize under-covered posts/comments), raise export hydration budgets with a hard request cap, paginate reactor lists until `captured >= reactionCount`, backfill missing post text from partial JSON, and feed all gaps into `coverage-report.json`.
 
 Tips for richer exports: open the full reactions dialog (not just hover tooltip), expand comment threads, and stay on the tab until stop.
 
@@ -129,7 +155,10 @@ Tips for richer exports: open the full reactions dialog (not just hover tooltip)
 | `export-manifest.json` | Artifact list, privacy flags, capture health |
 | `group-activity.json` | Structured Facebook posts, comments, reactions, people |
 | `graphql-captures.json` | Raw Facebook `/api/graphql` bodies (parser debug archive) |
-| `csv/*.csv` | `posts.csv`, `comments.csv`, `reactions.csv`, `people.csv`, `members.csv` |
+| `csv/*.csv` | `posts.csv`, `comments.csv`, `reactions.csv`, `people.csv`, `members.csv`, `user-activity.csv` |
+| `signals.json` | Flat user-activity signals (all rows) |
+| `signals-resolved.json` | Signals with stable `userId` only (for user rollup) |
+| `coverage-report.json` | *(planned)* Field-level classification readiness stats |
 
 ## Module layout
 

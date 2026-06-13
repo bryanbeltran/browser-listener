@@ -5,6 +5,13 @@ import {
   syncLinkedCommentAuthors,
 } from "./facebook-identity.js";
 import {
+  emptyCommentFeedbackIndex,
+  indexCommentFeedbackFromTarget,
+  recordCommentFeedbackId,
+  resolveCommentFeedbackId,
+  type CommentFeedbackIndex,
+} from "./comment-feedback-index.js";
+import {
   commentLegacyKey,
   collectReactionNames,
   decodeCommentPostId,
@@ -261,6 +268,7 @@ function dedupePostsByPostId(posts: FacebookPost[]): FacebookPost[] {
 function pushReactor(
   reactions: FacebookReaction[],
   addPerson: (p: Omit<FacebookPerson, "source"> & { source: string }) => void,
+  commentFeedbackIndex: CommentFeedbackIndex,
   args: {
     feedbackId?: string;
     userId: string;
@@ -271,6 +279,7 @@ function pushReactor(
   },
 ): void {
   const target = decodeFeedbackTarget(args.feedbackId);
+  indexReactorFeedback(commentFeedbackIndex, args.feedbackId);
   if (target.target === "comment" && target.commentId) {
     reactions.push({
       feedbackId: args.feedbackId,
@@ -296,6 +305,13 @@ function pushReactor(
     });
   }
   addPerson({ id: args.userId, name: args.userName, source: args.source });
+}
+
+function indexReactorFeedback(
+  index: CommentFeedbackIndex,
+  feedbackId?: string,
+): void {
+  indexCommentFeedbackFromTarget(index, feedbackId);
 }
 function backfillReactionTypes(reactions: FacebookReaction[]): FacebookReaction[] {
   const typed = new Map<string, string>();
@@ -559,6 +575,7 @@ export function extractFacebookGroupActivity(
   const people = new Map<string, FacebookPerson>();
   const reactionNames = new Map<string, string>();
   const feedbackCountIndex: FeedbackCountIndex = new Map();
+  const commentFeedbackIndex = emptyCommentFeedbackIndex();
   const posts = new Map<string, FacebookPost>();
   const comments = new Map<string, FacebookComment>();
   const commentKeys = new Map<string, string>();
@@ -760,6 +777,7 @@ export function extractFacebookGroupActivity(
               : null;
         if (feedbackNode) {
           const feedbackId = typeof feedbackNode.id === "string" ? feedbackNode.id : undefined;
+          indexReactorFeedback(commentFeedbackIndex, feedbackId);
           const total =
             feedbackNode.total_reaction_count &&
             typeof feedbackNode.total_reaction_count === "object" &&
@@ -780,7 +798,7 @@ export function extractFacebookGroupActivity(
             if (!userId || !userName) continue;
             const reactionInfo = e.feedback_reaction_info as { id?: string } | undefined;
             const reactionType = reactionTypeFromId(reactionInfo?.id, reactionNames);
-            pushReactor(reactions, addPerson, {
+            pushReactor(reactions, addPerson, commentFeedbackIndex, {
               feedbackId,
               userId,
               userName,
@@ -793,7 +811,7 @@ export function extractFacebookGroupActivity(
             if (!r || typeof r !== "object") continue;
             const u = r as Record<string, unknown>;
             if (u.__typename === "User" && typeof u.id === "string" && typeof u.name === "string") {
-              pushReactor(reactions, addPerson, {
+              pushReactor(reactions, addPerson, commentFeedbackIndex, {
                 feedbackId,
                 userId: u.id,
                 userName: u.name,
@@ -842,10 +860,26 @@ export function extractFacebookGroupActivity(
               node.feedback && typeof node.feedback === "object"
                 ? (node.feedback as Record<string, unknown>)
                 : undefined;
+            const legacyKey = commentLegacyKey(node.id, legacyToken, legacyFbid);
+            const feedbackFromNode =
+              typeof feedbackObj?.id === "string" ? feedbackObj.id : undefined;
             const feedbackId =
-              typeof feedbackObj?.id === "string"
-                ? feedbackObj.id
-                : encodeCommentFeedbackId(node.id, legacyFbid);
+              feedbackFromNode ??
+              resolveCommentFeedbackId(
+                commentFeedbackIndex,
+                node.id,
+                legacyKey,
+                legacyFbid,
+              ) ??
+              encodeCommentFeedbackId(node.id, legacyFbid);
+            if (feedbackId) {
+              recordCommentFeedbackId(
+                commentFeedbackIndex,
+                feedbackId,
+                node.id,
+                legacyKey,
+              );
+            }
             addComment(
               {
                 id: node.id,
@@ -940,6 +974,9 @@ export function extractFacebookGroupActivity(
   }
 
   const postList = [...posts.values()];
+  for (const feedbackId of feedbackCountIndex.keys()) {
+    indexCommentFeedbackFromTarget(commentFeedbackIndex, feedbackId);
+  }
   applyFeedbackCountIndex(postList, feedbackCountIndex);
   const { reactions: mergedReactions, hints: reactionHints } = consolidateReactions(
     backfillReactionTypes(reactions),
@@ -955,7 +992,13 @@ export function extractFacebookGroupActivity(
   const { posts: postsWithAuthors, comments: commentsWithAuthors } = backfillAuthorIds(
     linkedPosts,
     linkedComments,
-    dedupedPeople,
+    {
+      people: dedupedPeople,
+      members: [...members.values()],
+      posts: linkedPosts,
+      comments: linkedComments,
+      reactors: mergedReactions,
+    },
   );
   const postsWithSyncedComments = syncLinkedCommentAuthors(postsWithAuthors, commentsWithAuthors);
   const reactionsWithContext = enrichReactionContext(

@@ -1,12 +1,22 @@
 import type {
   FacebookComment,
+  FacebookGroupMember,
   FacebookPerson,
   FacebookPost,
   FacebookReaction,
 } from "../shared/types.js";
+import { commentLegacyKey } from "./facebook-parse.js";
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export interface AuthorIdBackfillContext {
+  people: FacebookPerson[];
+  members?: Pick<FacebookGroupMember, "userId" | "name">[];
+  posts?: Pick<FacebookPost, "authorId" | "authorName">[];
+  comments?: Pick<FacebookComment, "authorId" | "authorName">[];
+  reactors?: Pick<FacebookReaction, "userId" | "userName">[];
 }
 
 /** One person per Facebook user id; merge display names (prefer longer). */
@@ -30,13 +40,13 @@ export function dedupePeopleById(people: FacebookPerson[]): FacebookPerson[] {
   return [...byId.values()];
 }
 
-function buildNameToIdMap(people: FacebookPerson[]): Map<string, string> {
+function buildNameToIdMap(pairs: { id: string; name: string }[]): Map<string, string> {
   const counts = new Map<string, Set<string>>();
-  for (const p of people) {
-    if (!p.id || !p.name) continue;
-    const key = normalizeName(p.name);
+  for (const { id, name } of pairs) {
+    if (!id || !name) continue;
+    const key = normalizeName(name);
     const ids = counts.get(key) ?? new Set<string>();
-    ids.add(p.id);
+    ids.add(id);
     counts.set(key, ids);
   }
   const out = new Map<string, string>();
@@ -46,13 +56,43 @@ function buildNameToIdMap(people: FacebookPerson[]): Map<string, string> {
   return out;
 }
 
+export function buildAuthorNameToIdMap(context: AuthorIdBackfillContext): Map<string, string> {
+  const pairs: { id: string; name: string }[] = [];
+  for (const p of context.people) {
+    if (p.id && p.name) pairs.push({ id: p.id, name: p.name });
+  }
+  for (const m of context.members ?? []) {
+    if (m.userId && m.name) pairs.push({ id: m.userId, name: m.name });
+  }
+  for (const p of context.posts ?? []) {
+    if (p.authorId && p.authorName) pairs.push({ id: p.authorId, name: p.authorName });
+  }
+  for (const c of context.comments ?? []) {
+    if (c.authorId && c.authorName) pairs.push({ id: c.authorId, name: c.authorName });
+  }
+  for (const r of context.reactors ?? []) {
+    if (r.userId && r.userName) pairs.push({ id: r.userId, name: r.userName });
+  }
+  return buildNameToIdMap(pairs);
+}
+
+function normalizeBackfillContext(
+  contextOrPeople: AuthorIdBackfillContext | FacebookPerson[],
+): AuthorIdBackfillContext {
+  if (Array.isArray(contextOrPeople)) {
+    return { people: contextOrPeople };
+  }
+  return contextOrPeople;
+}
+
 export function backfillAuthorIds(
   posts: FacebookPost[],
   comments: FacebookComment[],
-  people: FacebookPerson[],
+  contextOrPeople: AuthorIdBackfillContext | FacebookPerson[],
 ): { posts: FacebookPost[]; comments: FacebookComment[] } {
-  const byId = new Map(people.map((p) => [p.id, p]));
-  const nameToId = buildNameToIdMap(people);
+  const context = normalizeBackfillContext(contextOrPeople);
+  const byId = new Map(context.people.map((p) => [p.id, p]));
+  const nameToId = buildAuthorNameToIdMap(context);
 
   const fillPost = (post: FacebookPost): FacebookPost => {
     let authorId = post.authorId;
@@ -108,6 +148,36 @@ export function syncLinkedCommentAuthors(
   });
 }
 
+function buildCommentLookup(comments: FacebookComment[]): Map<string, FacebookComment> {
+  const map = new Map<string, FacebookComment>();
+  for (const comment of comments) {
+    map.set(comment.id, comment);
+    const legacy = commentLegacyKey(comment.id);
+    if (legacy) map.set(legacy, comment);
+    if (comment.feedbackId) map.set(comment.feedbackId, comment);
+  }
+  return map;
+}
+
+function resolveCommentForReaction(
+  reaction: FacebookReaction,
+  commentByKey: Map<string, FacebookComment>,
+): FacebookComment | undefined {
+  if (!reaction.commentId) return undefined;
+  const direct = commentByKey.get(reaction.commentId);
+  if (direct) return direct;
+  const legacy = commentLegacyKey(reaction.commentId);
+  if (legacy) {
+    const fromLegacy = commentByKey.get(legacy);
+    if (fromLegacy) return fromLegacy;
+  }
+  if (reaction.feedbackId) {
+    const fromFeedback = commentByKey.get(reaction.feedbackId);
+    if (fromFeedback) return fromFeedback;
+  }
+  return undefined;
+}
+
 export function enrichReactionContext(
   reactions: FacebookReaction[],
   posts: FacebookPost[],
@@ -118,11 +188,11 @@ export function enrichReactionContext(
     const id = post.postId ?? post.id;
     if (id) postById.set(id, post);
   }
-  const commentById = new Map(comments.map((c) => [c.id, c]));
+  const commentByKey = buildCommentLookup(comments);
 
   return reactions.map((reaction) => {
     if (reaction.target === "comment" && reaction.commentId) {
-      const comment = commentById.get(reaction.commentId);
+      const comment = resolveCommentForReaction(reaction, commentByKey);
       if (!comment) return reaction;
       return {
         ...reaction,

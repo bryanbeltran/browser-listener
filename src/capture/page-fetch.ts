@@ -3,13 +3,19 @@ async function __browserListenerPageGraphqlFetch(url, fields) {
   const fb_dtsg =
     document.querySelector('input[name="fb_dtsg"]')?.getAttribute("value") || "";
   const lsd = document.querySelector('input[name="lsd"]')?.getAttribute("value") || "";
+  const jazoest = document.querySelector('input[name="jazoest"]')?.getAttribute("value") || "";
   const user = (document.cookie.match(/(?:^|;\\s*)c_user=(\\d+)/) || [])[1] || "";
   if (fb_dtsg) fields.fb_dtsg = fb_dtsg;
   if (lsd) fields.lsd = lsd;
+  if (jazoest) fields.jazoest = jazoest;
   if (user) {
     fields.__user = user;
     fields.av = user;
   }
+  const spinR = document.querySelector('input[name="__spin_r"]')?.getAttribute("value");
+  const spinT = document.querySelector('input[name="__spin_t"]')?.getAttribute("value");
+  if (spinR) fields.__spin_r = spinR;
+  if (spinT) fields.__spin_t = spinT;
   const body = new URLSearchParams(fields).toString();
   const friendlyName = fields.fb_api_req_friendly_name || "";
   const res = await fetch(url, {

@@ -132,6 +132,8 @@ export interface FacebookReaction {
 export interface FacebookUserActivitySignal {
   userId?: string;
   userName?: string;
+  /** True when userId is a stable Facebook numeric id (not name-only inference). */
+  userIdResolved: boolean;
   actionType: "post" | "comment" | "reaction";
   targetId?: string;
   targetType?: "post" | "comment" | "reaction";

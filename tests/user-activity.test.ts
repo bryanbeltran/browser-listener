@@ -25,6 +25,7 @@ describe("user activity export", () => {
     const activity = extractFacebookGroupActivity(network, { tabUrl: GROUP_FEED });
     const csv = buildUserActivityCsv(activity);
     expect(csv.split("\n")[0]).toContain("userId");
+    expect(csv.split("\n")[0]).toContain("userIdResolved");
     expect(csv).toContain("actionType");
     expect(csv).toContain("reaction");
   });
