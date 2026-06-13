@@ -98,10 +98,10 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
       healthHint,
       trunc ||
         (gaps
-          ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (webRequest fallback)"}`
+          ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (metadata-only fallback)"}`
           : dbg
-            ? "Debugger attached"
-            : "Using webRequest metadata fallback"),
+            ? "Debugger attached — GraphQL body capture active"
+            : "Debugger not attached — metadata-only fallback"),
     );
   }
 
@@ -135,17 +135,17 @@ async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
 
 btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
+  showStartError("");
   try {
     const res = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
       { type: MessageType.CONSENT_AND_START },
       30_000,
     );
     if (!res?.ok) throw new Error(res.error ?? "Could not start capture");
-    showStartError("");
     await refresh();
   } catch (err) {
-    btnStart.disabled = false;
     showStartError(err instanceof Error ? err.message : "Could not start capture");
+    await refresh();
   }
 });
 

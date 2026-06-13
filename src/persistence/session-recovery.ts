@@ -56,13 +56,18 @@ export async function updateDebuggerHealth(patch: {
     if (patch.attached) {
       session = {
         ...session,
-        health: { ...h, debuggerAttached: true },
+        health: { ...h, debuggerAttached: true, debuggerEverAttached: true },
       };
     }
     if (patch.recovered) {
       session = {
         ...session,
-        health: { ...session.health, lastRecoverAt: Date.now(), debuggerAttached: true },
+        health: {
+          ...session.health,
+          lastRecoverAt: Date.now(),
+          debuggerAttached: true,
+          debuggerEverAttached: true,
+        },
       };
     }
     return session;

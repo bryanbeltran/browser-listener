@@ -64,6 +64,7 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
   const h = session.health ?? ({} as CaptureSession["health"]);
   return {
     debuggerAttached: h.debuggerAttached ?? false,
+    debuggerEverAttached: h.debuggerEverAttached ?? false,
     debuggerDetachCount: h.debuggerDetachCount ?? 0,
     serviceWorkerRestarts: h.serviceWorkerRestarts ?? 0,
     partialGaps: h.partialGaps ?? [],

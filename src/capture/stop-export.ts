@@ -1,4 +1,8 @@
-import { detachDebugger, flushPendingApiBodyCaptures } from "./debugger-capture.js";
+import {
+  detachDebugger,
+  flushPendingApiBodyCaptures,
+  snapshotDebuggerHealthForExport,
+} from "./debugger-capture.js";
 import { runExportReactionHydration } from "./reaction-hydration.js";
 import { getActiveSession, stopSession, updateSessionTabUrl } from "./session-manager.js";
 import { prepareZipExport } from "../export/orchestrator.js";
@@ -32,6 +36,7 @@ async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
 
   if (session) {
     await flushPendingApiBodyCaptures();
+    await snapshotDebuggerHealthForExport();
     await stopSession();
     await detachDebugger();
   }

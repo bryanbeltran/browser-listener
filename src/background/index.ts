@@ -28,11 +28,7 @@ async function startWithConsent(
   const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
   await createSession(tabId, tab.url, merged);
   resetReactionHydrationScheduler();
-  try {
-    await attachDebugger(tabId);
-  } catch {
-    /* webRequest fallback remains active */
-  }
+  await attachDebugger(tabId);
 }
 
 registerDebuggerCapture();

@@ -27,6 +27,7 @@ export function buildPopupStateSnapshot(
           tabClosedDuringCapture: session.tabClosedDuringCapture,
           health: {
             debuggerAttached: session.health.debuggerAttached ?? false,
+            debuggerEverAttached: session.health.debuggerEverAttached ?? false,
             partialGaps: session.health.partialGaps ?? [],
             truncation: session.health.truncation ?? emptyTruncation(),
           },

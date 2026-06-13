@@ -18,6 +18,7 @@ vi.mock("../src/capture/session-manager.js", async (importOriginal) => {
 vi.mock("../src/capture/debugger-capture.js", () => ({
   detachDebugger: vi.fn(async () => {}),
   flushPendingApiBodyCaptures: vi.fn(async () => {}),
+  snapshotDebuggerHealthForExport: vi.fn(async () => {}),
 }));
 
 vi.mock("../src/export/orchestrator.js", () => ({

@@ -13,6 +13,7 @@ import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 function newHealth(): CaptureSession["health"] {
   return {
     debuggerAttached: false,
+    debuggerEverAttached: false,
     debuggerDetachCount: 0,
     serviceWorkerRestarts: 0,
     partialGaps: [],

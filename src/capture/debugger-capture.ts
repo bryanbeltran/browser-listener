@@ -1,6 +1,5 @@
-import { readSessionData, upsertNetwork } from "../persistence/store.js";
+import { patchSession, readSessionData, upsertNetwork } from "../persistence/store.js";
 import { updateDebuggerHealth } from "../persistence/session-recovery.js";
-import { recordHealthGap } from "../persistence/store.js";
 import { captureApiBodiesForRequest, shouldCaptureApiBody } from "./api-body-capture.js";
 import { onCaptureGraphqlActivity } from "./reaction-hydration.js";
 import { getActiveSession } from "./session-manager.js";
@@ -22,27 +21,65 @@ async function sessionTab(): Promise<number | null> {
   return s?.tabId ?? null;
 }
 
+async function detachChromeDebugger(tabId: number): Promise<void> {
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch {
+    /* not attached */
+  }
+}
+
+async function recordAttachFailure(tabId: number, chromeAttached: boolean, message: string): Promise<void> {
+  if (chromeAttached) {
+    await detachChromeDebugger(tabId);
+  }
+  attachedTabId = null;
+  await patchSession((session) => {
+    if (!session) return session;
+    return {
+      ...session,
+      health: {
+        ...session.health,
+        debuggerAttached: false,
+        partialGaps: [
+          ...session.health.partialGaps,
+          { at: Date.now(), reason: `debugger_attach_failed: ${message}` },
+        ],
+      },
+    };
+  });
+}
+
 export async function attachDebugger(tabId: number): Promise<void> {
+  await detachChromeDebugger(tabId);
+  if (attachedTabId === tabId) attachedTabId = null;
+
+  let chromeAttached = false;
   try {
     await chrome.debugger.attach({ tabId }, CDP_VERSION);
+    chromeAttached = true;
     await chrome.debugger.sendCommand({ tabId }, "Network.enable");
     attachedTabId = tabId;
     await updateDebuggerHealth({ attached: true });
   } catch (err) {
-    await recordHealthGap(`debugger_attach_failed: ${(err as Error).message}`);
+    await recordAttachFailure(tabId, chromeAttached, (err as Error).message);
     throw err;
   }
 }
 
 export async function detachDebugger(): Promise<void> {
-  if (attachedTabId == null) return;
+  const tabId = attachedTabId;
+  if (tabId == null) return;
   try {
-    await chrome.debugger.detach({ tabId: attachedTabId });
+    await chrome.debugger.detach({ tabId });
   } catch {
     /* already detached */
   }
   attachedTabId = null;
-  await updateDebuggerHealth({ detached: true });
+  const session = await getActiveSession();
+  if (session?.active) {
+    await updateDebuggerHealth({ detached: true });
+  }
 }
 
 async function tryRecover(): Promise<void> {
@@ -138,18 +175,30 @@ export function registerDebuggerCapture(): void {
 
   chrome.debugger.onDetach.addListener((_source, reason) => {
     attachedTabId = null;
-    void updateDebuggerHealth({ detached: true });
-    void recordHealthGap(`debugger_detach: ${reason}`);
+    void (async () => {
+      const session = await getActiveSession();
+      if (session?.active) {
+        await updateDebuggerHealth({ detached: true });
+        scheduleRecover();
+      }
+      await patchSession((s) => {
+        if (!s) return s;
+        return {
+          ...s,
+          health: {
+            ...s.health,
+            partialGaps: [
+              ...s.health.partialGaps,
+              { at: Date.now(), reason: `debugger_detach: ${reason}` },
+            ],
+          },
+        };
+      });
+    })();
 
     if (reason === "canceled_by_user") {
       onDebuggerCanceledByUser?.();
-      return;
     }
-
-    void getActiveSession().then((s) => {
-      if (!s?.active) return;
-      scheduleRecover();
-    });
   });
 }
 
@@ -160,12 +209,41 @@ export async function ensureDebuggerForSession(): Promise<void> {
   await attachDebugger(tabId);
 }
 
+/** Test helper — clear in-memory debugger state between isolated runs. */
+export function resetDebuggerCaptureForTests(): void {
+  attachedTabId = null;
+  if (recoverTimer) {
+    clearTimeout(recoverTimer);
+    recoverTimer = null;
+  }
+  pendingCdp.clear();
+  pendingBodyCaptures.clear();
+}
+
 export function getAttachedTabId(): number | null {
   return attachedTabId;
 }
 
 export function isDebuggerAttachedToTab(tabId: number): boolean {
   return attachedTabId === tabId;
+}
+
+/** Snapshot debugger health for export before detach clears in-memory state. */
+export async function snapshotDebuggerHealthForExport(): Promise<void> {
+  const tabId = attachedTabId;
+  await patchSession((session) => {
+    if (!session) return session;
+    const attached = session.health.debuggerAttached || tabId != null;
+    if (!attached && !session.health.debuggerEverAttached) return session;
+    return {
+      ...session,
+      health: {
+        ...session.health,
+        debuggerAttached: attached,
+        debuggerEverAttached: true,
+      },
+    };
+  });
 }
 
 /** Await in-flight body fetches and sweep pending CDP entries before debugger detach. */

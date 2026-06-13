@@ -166,6 +166,8 @@ export interface StorageTruncation {
 
 export interface SessionHealth {
   debuggerAttached: boolean;
+  /** True if CDP attach completed successfully at any point this session (export snapshot). */
+  debuggerEverAttached?: boolean;
   debuggerDetachCount: number;
   lastDetachAt?: number;
   lastRecoverAt?: number;
@@ -204,7 +206,7 @@ export interface PopupSessionView {
   startedAt: number;
   stoppedAt?: number;
   tabClosedDuringCapture?: boolean;
-  health: Pick<SessionHealth, "debuggerAttached" | "partialGaps" | "truncation">;
+  health: Pick<SessionHealth, "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation">;
 }
 
 export interface PopupStateSnapshot {
