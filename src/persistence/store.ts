@@ -154,6 +154,20 @@ function schedulePopupSnapshot(session: CaptureSession, networkCount: number): v
   }, POPUP_DEBOUNCE_MS);
 }
 
+/** Write popup state now on session transitions; debounce only count ticks during capture. */
+async function updatePopupSnapshot(
+  session: CaptureSession,
+  networkCount: number,
+  opts: { debounce: boolean },
+): Promise<void> {
+  if (opts.debounce) {
+    schedulePopupSnapshot(session, networkCount);
+    return;
+  }
+  cancelPopupDebounce();
+  await writePopupSnapshot(session, networkCount);
+}
+
 function resetCaptureStats(sessionId?: string): void {
   if (sessionId) captureStats.delete(sessionId);
   else captureStats.clear();
@@ -298,7 +312,8 @@ export async function patchSession(
 
   if (next?.active) {
     const stats = await loadCaptureStats(next.id);
-    schedulePopupSnapshot(next, stats.count);
+    const debounce = Boolean(meta.session?.active && meta.session.id === next.id);
+    await updatePopupSnapshot(next, stats.count, { debounce });
   } else if (next) {
     cancelPopupDebounce();
     const stats = await loadCaptureStats(next.id);
@@ -325,8 +340,10 @@ export async function withSession(
   const networkCount = next.session?.id
     ? (captureStats.get(next.session.id)?.count ?? (await loadCaptureStats(next.session.id)).count)
     : 0;
-  if (next.session?.active) schedulePopupSnapshot(next.session, networkCount);
-  else if (next.session) {
+  if (next.session?.active) {
+    const debounce = Boolean(data.session?.active && data.session.id === next.session.id);
+    await updatePopupSnapshot(next.session, networkCount, { debounce });
+  } else if (next.session) {
     cancelPopupDebounce();
     await writePopupSnapshot(next.session, networkCount);
   }

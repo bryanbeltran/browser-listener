@@ -1,7 +1,6 @@
 import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
-  flushPopupSnapshot,
   readSessionData,
   readSessionMeta,
   setSession,

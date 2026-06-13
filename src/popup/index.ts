@@ -123,10 +123,15 @@ async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
 btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
   try {
-    await sendMessageWithTimeout({ type: MessageType.CONSENT_AND_START }, 30_000);
+    const res = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.CONSENT_AND_START },
+      30_000,
+    );
+    if (!res?.ok) throw new Error(res.error ?? "Could not start capture");
     await refresh();
-  } catch {
+  } catch (err) {
     btnStart.disabled = false;
+    setText(healthHint, err instanceof Error ? err.message : "Could not start capture");
   }
 });
 
