@@ -28,7 +28,7 @@ describe("popup state", () => {
     expect(state.canExport).toBe(false);
   });
 
-  it("readPopupState reads only the lightweight popup key", async () => {
+  it("readPopupState avoids loading network bodies from storage", async () => {
     const session = sampleSession({ active: true, id: "popup-session" });
     await writeSessionData({
       ...emptySessionData(),
@@ -53,8 +53,12 @@ describe("popup state", () => {
     const { readPopupState } = await import("../src/popup/popup-state.js");
     await readPopupState();
 
-    expect(getSpy).toHaveBeenCalledTimes(1);
+    expect(getSpy).toHaveBeenCalledTimes(2);
     expect(getSpy.mock.calls[0]?.[0]).toBe("browserListenerPopupState");
+    expect(getSpy.mock.calls[1]?.[0]).toEqual([
+      "browserListenerSessionData",
+      "browserListenerActiveSessionId",
+    ]);
   });
 
   it("popupStateFromSessionData sets canExport when stopped with network data", () => {

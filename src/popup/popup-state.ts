@@ -1,4 +1,4 @@
-import { readPopupStateSnapshot } from "../persistence/store.js";
+import { readPopupStateForUi } from "../persistence/store.js";
 import {
   buildPopupStateSnapshot,
   popupStateFromSnapshot,
@@ -12,7 +12,7 @@ export function popupStateFromSessionData(data: SessionData): PopupStateResponse
   );
 }
 
-/** Read capture UI state from a lightweight storage key (no GraphQL bodies). */
+/** Read capture UI state; reconciles popup snapshot with session meta. */
 export async function readPopupState(): Promise<PopupStateResponse> {
-  return popupStateFromSnapshot(await readPopupStateSnapshot());
+  return readPopupStateForUi();
 }

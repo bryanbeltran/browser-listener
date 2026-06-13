@@ -81,7 +81,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           tabId ??
           (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
         if (id == null) return { ok: false, error: "No active tab" };
-        if (await getActiveSession()) return { ok: false, error: "Already capturing" };
         await startWithConsent(id, opts);
         return { ok: true };
       }

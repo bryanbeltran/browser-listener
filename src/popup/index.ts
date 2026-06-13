@@ -29,6 +29,7 @@ const healthHint = el("health-hint");
 const exportStatus = el("export-status");
 const exportHint = el("export-hint");
 const exportEntities = el("export-entities");
+const startError = el("start-error");
 const cNetwork = el("c-network");
 const eNetwork = el("e-network");
 
@@ -59,6 +60,17 @@ function applyExportResult(res: ExportZipResponse): void {
   if (res.counts) lastExportCounts = res.counts;
   showExportEntities(lastExportCounts);
   setText(exportHint, `Saved ${res.filename ?? "export"}`);
+}
+
+function showStartError(message: string): void {
+  if (!startError) return;
+  if (message) {
+    startError.textContent = message;
+    startError.classList.remove("hidden");
+  } else {
+    startError.textContent = "";
+    startError.classList.add("hidden");
+  }
 }
 
 function setText(node: HTMLElement | null, text: string): void {
@@ -111,6 +123,7 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   }
 
   if (btnStart) btnStart.disabled = active;
+  if (active) showStartError("");
 }
 
 async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
@@ -128,10 +141,11 @@ btnStart?.addEventListener("click", async () => {
       30_000,
     );
     if (!res?.ok) throw new Error(res.error ?? "Could not start capture");
+    showStartError("");
     await refresh();
   } catch (err) {
     btnStart.disabled = false;
-    setText(healthHint, err instanceof Error ? err.message : "Could not start capture");
+    showStartError(err instanceof Error ? err.message : "Could not start capture");
   }
 });
 

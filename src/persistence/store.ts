@@ -19,6 +19,11 @@ import type {
   PopupStateSnapshot,
   SessionData,
 } from "../shared/types.js";
+import type { PopupStateResponse } from "../shared/messages.js";
+import {
+  buildPopupStateSnapshot,
+  popupStateFromSnapshot,
+} from "./popup-state.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
@@ -284,6 +289,38 @@ export async function syncPopupStateSnapshot(): Promise<void> {
 export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
   const raw = await chrome.storage.local.get(POPUP_STATE_KEY);
   return (raw[POPUP_STATE_KEY] as PopupStateSnapshot | undefined) ?? emptyPopupStateSnapshot();
+}
+
+/** Reconcile popup snapshot with session meta + ACTIVE_FLAG (no IndexedDB). */
+export async function readPopupStateForUi(): Promise<PopupStateResponse> {
+  const snapshot = await readPopupStateSnapshot();
+  const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
+  const persisted = raw[STORAGE_KEY] as PersistedSessionMeta | SessionData | undefined;
+  const activeId = (raw[ACTIVE_FLAG] as string | null) ?? null;
+
+  let session = normalizeSession(
+    isLegacySessionData(persisted) ? persisted.session : (persisted?.session ?? null),
+  );
+  if (session) {
+    session = {
+      ...session,
+      active: Boolean(activeId && session.id === activeId),
+    };
+  }
+
+  if (!session) {
+    return popupStateFromSnapshot(snapshot);
+  }
+
+  const snapshotActive = snapshot.session?.active ?? false;
+  const snapshotId = snapshot.session?.id;
+  if (session.active !== snapshotActive || session.id !== snapshotId) {
+    return popupStateFromSnapshot(
+      buildPopupStateSnapshot(session, snapshot.counts.network),
+    );
+  }
+
+  return popupStateFromSnapshot(snapshot);
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
