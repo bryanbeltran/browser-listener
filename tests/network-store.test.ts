@@ -5,13 +5,16 @@ import {
   putNetworkEntries,
   upsertNetworkEntry,
 } from "../src/persistence/network-store.js";
+import { NETWORK_STORE_LIMITS } from "../src/persistence/limits.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 
 const SESSION = "session-idb-test";
 
 describe("network store (IndexedDB)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     installChromeStorageMock();
+    const { deleteNetworkDatabase } = await import("../src/persistence/network-store.js");
+    await deleteNetworkDatabase();
   });
 
   afterEach(() => {
@@ -73,7 +76,7 @@ describe("network store (IndexedDB)", () => {
   });
 
   it("bulk put replaces session entries via store writeSessionData path", async () => {
-    const truncated = await putNetworkEntries(SESSION, [
+    const result = await putNetworkEntries(SESSION, [
       {
         id: "1",
         sessionId: SESSION,
@@ -93,7 +96,32 @@ describe("network store (IndexedDB)", () => {
         type: "xhr",
       },
     ]);
-    expect(truncated).toBe(0);
+    expect(result.truncated).toBe(0);
     expect(await countNetworkEntries(SESSION)).toBe(2);
+  });
+
+  it("evicts oldest entries when soft cap exceeded without listing all rows each time", async () => {
+    const originalCap = NETWORK_STORE_LIMITS.entrySoftCap;
+    NETWORK_STORE_LIMITS.entrySoftCap = 3;
+    NETWORK_STORE_LIMITS.byteBudget = Number.MAX_SAFE_INTEGER;
+    try {
+      for (let i = 0; i < 5; i++) {
+        await upsertNetworkEntry(SESSION, {
+          id: `id-${i}`,
+          sessionId: SESSION,
+          requestId: `req-${i}`,
+          timestamp: i,
+          url: `https://www.facebook.com/api/graphql/?i=${i}`,
+          method: "POST",
+          type: "xhr",
+        });
+      }
+      const entries = await listNetworkEntries(SESSION);
+      expect(entries).toHaveLength(3);
+      expect(entries.map((e) => e.requestId)).toEqual(["req-2", "req-3", "req-4"]);
+    } finally {
+      NETWORK_STORE_LIMITS.entrySoftCap = originalCap;
+      NETWORK_STORE_LIMITS.byteBudget = 128 * 1024 * 1024;
+    }
   });
 });

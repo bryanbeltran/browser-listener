@@ -1,4 +1,9 @@
-import { activityForHydration, invalidateHydrationSnapshot } from "./hydration-snapshot.js";
+import {
+  ensureHydrationIndex,
+  getCachedGraphqlDocId,
+  getCachedGraphqlTemplate,
+  getHydrationActivity,
+} from "./hydration-index.js";
 import {
   ALL_REACTION_TYPE_IDS,
   isDialogReactionSource,
@@ -344,8 +349,8 @@ function resolveHydrationQuery(
   network: NetworkEntry[],
   preferTabRefetch: boolean,
 ): HydrationQueryPlan | null {
-  const tabDocId = findGraphqlDocId(network, TAB_CONTENT_REFETCH_QUERY);
-  const tooltipDocId = findGraphqlDocId(network, TOOLTIP_REACTION_QUERY);
+  const tabDocId = getCachedGraphqlDocId(network, TAB_CONTENT_REFETCH_QUERY);
+  const tooltipDocId = getCachedGraphqlDocId(network, TOOLTIP_REACTION_QUERY);
   if (preferTabRefetch && tabDocId) {
     return {
       friendlyName: TAB_CONTENT_REFETCH_QUERY,
@@ -391,7 +396,6 @@ async function storeHydrationResponse(
     bodyCaptured: true,
   };
   await upsertNetwork(entry);
-  invalidateHydrationSnapshot();
 }
 
 async function fetchReactionType(
@@ -457,8 +461,15 @@ async function hydrateTarget(
     onRequest?: () => boolean;
   },
 ): Promise<boolean> {
-  const data = await readSessionData();
-  const template = findGraphqlRequestTemplate(data.network);
+  let network: NetworkEntry[] = [];
+  let template = getCachedGraphqlTemplate(network);
+  let plan = template ? resolveHydrationQuery(network, opts.preferTabRefetch) : null;
+
+  if (!template || !plan) {
+    const data = await readSessionData();
+    network = data.network;
+    template = getCachedGraphqlTemplate(network);
+  }
   if (!template) {
     if (opts.recordGaps && !state.templateGapRecorded) {
       state.templateGapRecorded = true;
@@ -467,8 +478,8 @@ async function hydrateTarget(
     return false;
   }
 
-  const plan = resolveHydrationQuery(data.network, opts.preferTabRefetch);
-  if (!plan) {
+  const planResolved = plan ?? resolveHydrationQuery(network, opts.preferTabRefetch);
+  if (!planResolved) {
     if (opts.recordGaps && !state.docIdGapRecorded) {
       state.docIdGapRecorded = true;
       await recordHealthGap("reaction_hydration: no reaction query doc_id captured");
@@ -484,7 +495,7 @@ async function hydrateTarget(
       tabId,
       sessionId,
       template,
-      plan,
+      planResolved,
       target.feedbackId,
       reactionId,
       {
@@ -583,8 +594,8 @@ async function runReactionHydrationCycle(tabId: number): Promise<void> {
 
   state.running = true;
   try {
-    const data = await readSessionData();
-    const activity = activityForHydration(data.network, session.tabUrl);
+    await ensureHydrationIndex(session.id, session.tabUrl);
+    const activity = getHydrationActivity();
     const target = selectNextHydrationTarget(
       activity.posts,
       activity.comments,
@@ -672,8 +683,8 @@ export async function runExportReactionHydration(tabId: number): Promise<void> {
         break;
       }
 
-      const data = await readSessionData();
-      const activity = activityForHydration(data.network, session.tabUrl);
+      await ensureHydrationIndex(session.id, session.tabUrl);
+      const activity = getHydrationActivity();
       const target = selectNextHydrationTarget(
         activity.posts,
         activity.comments,

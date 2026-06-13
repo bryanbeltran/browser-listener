@@ -15,5 +15,5 @@ export async function onServiceWorkerActivate(): Promise<void> {
     await markServiceWorkerRestart();
   }
   await chrome.storage.session.set({ [SW_BOOT_KEY]: true });
-  void syncPopupStateSnapshot();
+  await syncPopupStateSnapshot();
 }

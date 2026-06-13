@@ -402,6 +402,11 @@ function consolidateReactions(
   };
 }
 
+/** Dedupe raw reactor rows the same way as export-time enrichment. */
+export function consolidateFacebookReactions(raw: FacebookReaction[]): FacebookReaction[] {
+  return consolidateReactions(backfillReactionTypes(raw)).reactions;
+}
+
 function toLinkedReaction(r: FacebookReaction) {
   return {
     userId: r.userId,

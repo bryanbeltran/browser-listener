@@ -1,9 +1,16 @@
-import { NETWORK_STORE_LIMITS, totalNetworkBytes } from "./limits.js";
+import { NETWORK_STORE_LIMITS, estimateNetworkEntryBytes } from "./limits.js";
 import type { NetworkEntry } from "../shared/types.js";
 
 const DB_NAME = "browser-listener";
 const DB_VERSION = 1;
 const STORE = "network_entries";
+
+export interface UpsertNetworkResult {
+  truncated: number;
+  isNew: boolean;
+  previous: NetworkEntry | null;
+  evicted: NetworkEntry[];
+}
 
 function idb(): IDBFactory {
   const factory = globalThis.indexedDB;
@@ -103,54 +110,103 @@ export async function countNetworkEntries(sessionId: string): Promise<number> {
   });
 }
 
-async function deleteOldestEntry(sessionId: string): Promise<boolean> {
+async function deleteOldestEntry(sessionId: string): Promise<NetworkEntry | null> {
   return withStore("readwrite", async (store) => {
     const index = store.index("sessionTimestamp");
     const cursor = await requestToPromise(
       index.openCursor(IDBKeyRange.bound([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])),
     );
-    if (!cursor) return false;
+    if (!cursor) return null;
+    const entry = cursor.value as NetworkEntry;
     await requestToPromise(cursor.delete());
-    return true;
+    return entry;
   });
 }
 
-async function enforceSessionLimits(sessionId: string): Promise<number> {
+function projectedByteEstimate(
+  byteEstimate: number | undefined,
+  entries: { entry: NetworkEntry; previous: NetworkEntry | null; isNew: boolean }[],
+): number | undefined {
+  if (byteEstimate == null) return undefined;
+  let bytes = byteEstimate;
+  for (const { entry, previous, isNew } of entries) {
+    const nextBytes = estimateNetworkEntryBytes(entry);
+    if (isNew) bytes += nextBytes;
+    else if (previous) bytes += nextBytes - estimateNetworkEntryBytes(previous);
+  }
+  return bytes;
+}
+
+async function enforceSessionLimits(
+  sessionId: string,
+  byteEstimate?: number,
+): Promise<{ truncated: number; evicted: NetworkEntry[] }> {
   const { byteBudget, entrySoftCap } = NETWORK_STORE_LIMITS;
+  const evicted: NetworkEntry[] = [];
   let truncated = 0;
-  for (let i = 0; i < entrySoftCap + 1; i++) {
-    const entries = await listNetworkEntries(sessionId);
-    if (entries.length <= entrySoftCap && totalNetworkBytes(entries) <= byteBudget) {
-      break;
-    }
+
+  let count = await countNetworkEntries(sessionId);
+  let bytes = byteEstimate ?? 0;
+  const checkBytes = byteEstimate != null;
+
+  while (count > entrySoftCap || (checkBytes && bytes > byteBudget)) {
+    if (count <= entrySoftCap && (!checkBytes || bytes <= byteBudget)) break;
     const deleted = await deleteOldestEntry(sessionId);
     if (!deleted) break;
+    evicted.push(deleted);
     truncated += 1;
+    count -= 1;
+    if (checkBytes) bytes -= estimateNetworkEntryBytes(deleted);
   }
-  return truncated;
+
+  return { truncated, evicted };
 }
 
 export async function putNetworkEntries(
   sessionId: string,
   entries: NetworkEntry[],
-): Promise<number> {
-  if (!entries.length) return 0;
+  byteEstimate?: number,
+): Promise<UpsertNetworkResult> {
+  if (!entries.length) {
+    return { truncated: 0, isNew: false, previous: null, evicted: [] };
+  }
+  let isNew = false;
+  let previous: NetworkEntry | null = null;
+  const writes: { entry: NetworkEntry; previous: NetworkEntry | null; isNew: boolean }[] = [];
   await withStore("readwrite", async (store) => {
     for (const entry of entries) {
+      const existing = (await requestToPromise(store.get(entry.requestId))) as NetworkEntry | undefined;
+      const entryIsNew = !existing;
+      if (entryIsNew) isNew = true;
+      else if (!previous) previous = existing;
+      writes.push({ entry, previous: existing ?? null, isNew: entryIsNew });
       await requestToPromise(store.put({ ...entry, sessionId }));
     }
   });
-  return enforceSessionLimits(sessionId);
+  const { truncated, evicted } = await enforceSessionLimits(
+    sessionId,
+    projectedByteEstimate(byteEstimate, writes),
+  );
+  return { truncated, isNew, previous, evicted };
 }
 
 export async function upsertNetworkEntry(
   sessionId: string,
   entry: NetworkEntry,
-): Promise<number> {
+  byteEstimate?: number,
+): Promise<UpsertNetworkResult> {
+  let previous: NetworkEntry | null = null;
+  let isNew = false;
   await withStore("readwrite", async (store) => {
+    previous = ((await requestToPromise(store.get(entry.requestId))) as NetworkEntry | undefined) ?? null;
+    isNew = !previous;
     await requestToPromise(store.put({ ...entry, sessionId }));
   });
-  return enforceSessionLimits(sessionId);
+  const { truncated, evicted } = await enforceSessionLimits(
+    sessionId,
+    projectedByteEstimate(byteEstimate, [{ entry, previous, isNew }]),
+  );
+  return { truncated, isNew, previous, evicted };
 }
 
 export async function clearNetworkEntries(sessionId: string): Promise<void> {

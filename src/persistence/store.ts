@@ -4,7 +4,7 @@ import {
   emptyPopupStateSnapshot,
   POPUP_STATE_KEY,
 } from "./popup-state.js";
-import { emptyTruncation } from "./limits.js";
+import { emptyTruncation, estimateNetworkEntryBytes, totalNetworkBytes } from "./limits.js";
 import {
   clearNetworkEntries,
   countNetworkEntries,
@@ -22,10 +22,20 @@ import type {
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
+const POPUP_DEBOUNCE_MS = 1500;
 
 interface PersistedSessionMeta {
   session: CaptureSession | null;
 }
+
+interface SessionCaptureStats {
+  count: number;
+  bytes: number;
+}
+
+const captureStats = new Map<string, SessionCaptureStats>();
+let popupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPopup: { session: CaptureSession; count: number } | null = null;
 
 export function emptySessionData(): SessionData {
   return {
@@ -85,14 +95,21 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
   }
 
   if (isLegacySessionData(persisted) && session?.id && persisted.network.length > 0) {
-    const truncated = await putNetworkEntries(session.id, persisted.network);
-    if (truncated > 0 && session) {
-      session = bumpTruncation(session, truncated);
+    const migratedBytes = totalNetworkBytes(persisted.network);
+    const result = await putNetworkEntries(session.id, persisted.network, migratedBytes);
+    if (result.truncated > 0 && session) {
+      session = bumpTruncation(session, result.truncated);
     }
     await writePersistedMeta({ session });
   }
 
   return { session };
+}
+
+/** Session metadata only — does not load network entries from IndexedDB. */
+export async function readSessionMeta(): Promise<CaptureSession | null> {
+  const meta = await readPersistedMeta();
+  return meta.session;
 }
 
 async function writePersistedMeta(meta: PersistedSessionMeta): Promise<void> {
@@ -105,6 +122,80 @@ async function writePersistedMeta(meta: PersistedSessionMeta): Promise<void> {
 async function writePopupSnapshot(session: CaptureSession | null, networkCount: number): Promise<void> {
   const snapshot = buildPopupStateSnapshot(session, networkCount);
   await chrome.storage.local.set({ [POPUP_STATE_KEY]: snapshot });
+}
+
+export async function flushPopupSnapshot(): Promise<void> {
+  if (popupDebounceTimer) {
+    clearTimeout(popupDebounceTimer);
+    popupDebounceTimer = null;
+  }
+  if (!pendingPopup) return;
+  const { session, count } = pendingPopup;
+  pendingPopup = null;
+  await writePopupSnapshot(session, count);
+}
+
+function cancelPopupDebounce(): void {
+  if (popupDebounceTimer) {
+    clearTimeout(popupDebounceTimer);
+    popupDebounceTimer = null;
+  }
+  pendingPopup = null;
+}
+
+function schedulePopupSnapshot(session: CaptureSession, networkCount: number): void {
+  pendingPopup = { session, count: networkCount };
+  if (popupDebounceTimer) clearTimeout(popupDebounceTimer);
+  popupDebounceTimer = setTimeout(() => {
+    popupDebounceTimer = null;
+    const pending = pendingPopup;
+    pendingPopup = null;
+    if (pending) void writePopupSnapshot(pending.session, pending.count);
+  }, POPUP_DEBOUNCE_MS);
+}
+
+function resetCaptureStats(sessionId?: string): void {
+  if (sessionId) captureStats.delete(sessionId);
+  else captureStats.clear();
+}
+
+async function loadCaptureStats(sessionId: string): Promise<SessionCaptureStats> {
+  const cached = captureStats.get(sessionId);
+  if (cached) return cached;
+
+  const count = await countNetworkEntries(sessionId);
+  const entries = count > 0 ? await listNetworkEntries(sessionId) : [];
+  const stats = { count, bytes: totalNetworkBytes(entries) };
+  captureStats.set(sessionId, stats);
+  return stats;
+}
+
+function applyEntryStats(
+  sessionId: string,
+  entry: NetworkEntry,
+  previous: NetworkEntry | null,
+  isNew: boolean,
+): SessionCaptureStats {
+  const stats = captureStats.get(sessionId) ?? { count: 0, bytes: 0 };
+  const nextBytes = estimateNetworkEntryBytes(entry);
+  if (isNew) {
+    stats.count += 1;
+    stats.bytes += nextBytes;
+  } else if (previous) {
+    stats.bytes += nextBytes - estimateNetworkEntryBytes(previous);
+  }
+  captureStats.set(sessionId, stats);
+  return stats;
+}
+
+function applyEvictedEntries(sessionId: string, evicted: NetworkEntry[]): void {
+  if (!evicted.length) return;
+  const stats = captureStats.get(sessionId) ?? { count: 0, bytes: 0 };
+  for (const entry of evicted) {
+    stats.count = Math.max(0, stats.count - 1);
+    stats.bytes = Math.max(0, stats.bytes - estimateNetworkEntryBytes(entry));
+  }
+  captureStats.set(sessionId, stats);
 }
 
 function bumpTruncation(session: CaptureSession, count: number): CaptureSession {
@@ -132,7 +223,18 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   let truncated = 0;
 
   if (session?.id && data.network.length > 0) {
-    truncated = await putNetworkEntries(session.id, data.network.map((e) => redactDeep(e)));
+    const stats = await loadCaptureStats(session.id);
+    const redactedNetwork = data.network.map((e) => redactDeep(e));
+    const result = await putNetworkEntries(session.id, redactedNetwork, stats.bytes);
+    truncated = result.truncated;
+    applyEvictedEntries(session.id, result.evicted);
+    const hydration = await import("../capture/hydration-index.js");
+    for (const entry of redactedNetwork) {
+      hydration.ingestNetworkEntry(entry, session.tabUrl);
+    }
+    if (result.evicted.length > 0) {
+      await hydration.rebuildHydrationIndex(session.id, session.tabUrl);
+    }
   }
 
   let sessionToStore = session;
@@ -145,7 +247,15 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
 
   const networkCount = sessionToStore?.id ? await countNetworkEntries(sessionToStore.id) : 0;
-  await writePopupSnapshot(sessionToStore, networkCount);
+  if (sessionToStore?.id) {
+    const entries = networkCount > 0 ? await listNetworkEntries(sessionToStore.id) : [];
+    captureStats.set(sessionToStore.id, {
+      count: networkCount,
+      bytes: totalNetworkBytes(entries),
+    });
+  }
+  await flushPopupSnapshot();
+  if (sessionToStore) await writePopupSnapshot(sessionToStore, networkCount);
 
   const network = sessionToStore?.id ? await listNetworkEntries(sessionToStore.id) : [];
   return normalizeSessionData({ session: sessionToStore, network });
@@ -174,6 +284,32 @@ function bumpHealth(
   return { ...session, health: { ...session.health, ...patch } };
 }
 
+/** Patch session metadata without loading network entries from IndexedDB. */
+export async function patchSession(
+  fn: (session: CaptureSession | null) => CaptureSession | null,
+): Promise<CaptureSession | null> {
+  const meta = await readPersistedMeta();
+  const next = normalizeSession(fn(meta.session));
+  if (next === meta.session && !next) return next;
+
+  await writePersistedMeta({ session: next });
+  const activeId = next?.active ? next.id : null;
+  await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
+
+  if (next?.active) {
+    const stats = await loadCaptureStats(next.id);
+    schedulePopupSnapshot(next, stats.count);
+  } else if (next) {
+    cancelPopupDebounce();
+    const stats = await loadCaptureStats(next.id);
+    await writePopupSnapshot(next, stats.count);
+  } else {
+    cancelPopupDebounce();
+  }
+
+  return next;
+}
+
 export async function withSession(
   fn: (data: SessionData) => SessionData | Promise<SessionData>,
 ): Promise<SessionData> {
@@ -186,8 +322,14 @@ export async function withSession(
     await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
   }
 
-  const networkCount = next.session?.id ? await countNetworkEntries(next.session.id) : 0;
-  await writePopupSnapshot(next.session, networkCount);
+  const networkCount = next.session?.id
+    ? (captureStats.get(next.session.id)?.count ?? (await loadCaptureStats(next.session.id)).count)
+    : 0;
+  if (next.session?.active) schedulePopupSnapshot(next.session, networkCount);
+  else if (next.session) {
+    cancelPopupDebounce();
+    await writePopupSnapshot(next.session, networkCount);
+  }
 
   const network = await loadNetworkForSession(next.session);
   return { session: next.session, network };
@@ -202,29 +344,33 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   if (!meta.session?.active) return;
 
   const redacted = redactDeep(entry);
-  const truncated = await idbUpsertNetworkEntry(meta.session.id, redacted);
+  const stats = await loadCaptureStats(meta.session.id);
+  const result = await idbUpsertNetworkEntry(meta.session.id, redacted, stats.bytes);
+  const nextStats = applyEntryStats(meta.session.id, redacted, result.previous, result.isNew);
+  applyEvictedEntries(meta.session.id, result.evicted);
+
+  const hydration = await import("../capture/hydration-index.js");
+  if (result.evicted.length > 0) {
+    await hydration.rebuildHydrationIndex(meta.session.id, meta.session.tabUrl);
+  } else {
+    hydration.ingestNetworkEntry(redacted, meta.session.tabUrl);
+  }
 
   let session = meta.session;
-  if (truncated > 0) {
-    session = bumpTruncation(session, truncated);
+  if (result.truncated > 0) {
+    session = bumpTruncation(session, result.truncated);
     await writePersistedMeta({ session });
   }
 
-  const networkCount = await countNetworkEntries(session.id);
-  const activeId = session.active ? session.id : null;
-  await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
-  await writePopupSnapshot(session, networkCount);
+  schedulePopupSnapshot(session, nextStats.count);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {
-  await withSession((data) => {
-    if (!data.session) return data;
-    return {
-      ...data,
-      session: bumpHealth(data.session, {
-        partialGaps: [...data.session.health.partialGaps, { at: Date.now(), reason }],
-      }),
-    };
+  await patchSession((session) => {
+    if (!session) return session;
+    return bumpHealth(session, {
+      partialGaps: [...session.health.partialGaps, { at: Date.now(), reason }],
+    });
   });
 }
 
@@ -232,11 +378,18 @@ export async function clearSessionData(): Promise<void> {
   const meta = await readPersistedMeta();
   if (meta.session?.id) {
     await clearNetworkEntries(meta.session.id);
+    resetCaptureStats(meta.session.id);
+  } else {
+    resetCaptureStats();
   }
+  const { resetHydrationIndex } = await import("../capture/hydration-index.js");
+  resetHydrationIndex();
+  await flushPopupSnapshot();
   await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);
 }
 
 /** Test helper — wipe IndexedDB network store between tests. */
 export async function resetNetworkStoreForTests(): Promise<void> {
   await deleteNetworkDatabase();
+  resetCaptureStats();
 }

@@ -1,4 +1,4 @@
-import { withSession } from "../persistence/store.js";
+import { patchSession } from "../persistence/store.js";
 import { recordHealthGap } from "../persistence/store.js";
 import { redactDeep, redactString } from "../redaction/engine.js";
 import { getActiveSession } from "./session-manager.js";
@@ -44,11 +44,11 @@ export function prepareBodyForStorage(raw: string): {
 /** Track stored body bytes in session health (no cap). */
 export async function tryReserveApiBodyBytes(byteCount: number): Promise<boolean> {
   if (byteCount <= 0) return true;
-  await withSession((data) => {
-    if (!data.session?.active) return data;
-    const health = data.session.health;
+  await patchSession((session) => {
+    if (!session?.active) return session;
+    const health = session.health;
     health.apiBodyBytesStored = (health.apiBodyBytesStored ?? 0) + byteCount;
-    return data;
+    return session;
   });
   return true;
 }

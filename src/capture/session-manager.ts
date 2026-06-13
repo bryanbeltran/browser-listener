@@ -1,10 +1,13 @@
 import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
+  flushPopupSnapshot,
   readSessionData,
+  readSessionMeta,
   setSession,
   withSession,
 } from "../persistence/store.js";
+import { resetHydrationIndex } from "./hydration-index.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -35,6 +38,7 @@ export async function createSession(
     health: newHealth(),
   };
   await clearSessionData();
+  resetHydrationIndex();
   await withSession(() => ({
     session,
     network: [],
@@ -56,8 +60,8 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
 }
 
 export async function getActiveSession(): Promise<CaptureSession | null> {
-  const data = await readSessionData();
-  return data.session?.active ? data.session : null;
+  const session = await readSessionMeta();
+  return session?.active ? session : null;
 }
 
 export async function updateSessionTabUrl(tabUrl: string): Promise<void> {
