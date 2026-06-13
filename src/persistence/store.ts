@@ -42,7 +42,7 @@ interface SessionCaptureStats {
 
 const captureStats = new Map<string, SessionCaptureStats>();
 let popupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingPopup: { session: CaptureSession; count: number } | null = null;
+let pendingPopup: { count: number } | null = null;
 
 export function emptySessionData(): SessionData {
   return {
@@ -139,9 +139,10 @@ export async function flushPopupSnapshot(): Promise<void> {
     popupDebounceTimer = null;
   }
   if (!pendingPopup) return;
-  const { session, count } = pendingPopup;
+  const { count } = pendingPopup;
   pendingPopup = null;
-  await writePopupSnapshot(session, count);
+  const meta = await readPersistedMeta();
+  await writePopupSnapshot(meta.session, count);
 }
 
 function cancelPopupDebounce(): void {
@@ -152,14 +153,18 @@ function cancelPopupDebounce(): void {
   pendingPopup = null;
 }
 
-function schedulePopupSnapshot(session: CaptureSession, networkCount: number): void {
-  pendingPopup = { session, count: networkCount };
+function schedulePopupSnapshot(networkCount: number): void {
+  pendingPopup = { count: networkCount };
   if (popupDebounceTimer) clearTimeout(popupDebounceTimer);
   popupDebounceTimer = setTimeout(() => {
     popupDebounceTimer = null;
     const pending = pendingPopup;
     pendingPopup = null;
-    if (pending) void writePopupSnapshot(pending.session, pending.count);
+    if (!pending) return;
+    void (async () => {
+      const meta = await readPersistedMeta();
+      await writePopupSnapshot(meta.session, pending.count);
+    })();
   }, POPUP_DEBOUNCE_MS);
 }
 
@@ -323,12 +328,45 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
     );
   }
 
+  if (popupHealthStale(snapshot, session)) {
+    return popupStateFromSnapshot(
+      buildPopupStateSnapshot(session, snapshot.counts.network),
+    );
+  }
+
   return popupStateFromSnapshot(snapshot);
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
   const raw = await chrome.storage.local.get(ACTIVE_FLAG);
   return (raw[ACTIVE_FLAG] as string | null) ?? null;
+}
+
+function healthAffectsPopup(
+  prev: CaptureSession | null,
+  next: CaptureSession | null,
+): boolean {
+  if (!prev?.health || !next?.health) return true;
+  const p = prev.health;
+  const n = next.health;
+  return (
+    p.debuggerAttached !== n.debuggerAttached ||
+    p.debuggerEverAttached !== n.debuggerEverAttached ||
+    p.lastAttachError !== n.lastAttachError ||
+    p.partialGaps.length !== n.partialGaps.length
+  );
+}
+
+function popupHealthStale(snapshot: PopupStateSnapshot, session: CaptureSession): boolean {
+  const sh = snapshot.session?.health;
+  if (!snapshot.session || snapshot.session.id !== session.id) return false;
+  const mh = session.health;
+  return (
+    (sh?.debuggerAttached ?? false) !== (mh.debuggerAttached ?? false) ||
+    (sh?.debuggerEverAttached ?? false) !== (mh.debuggerEverAttached ?? false) ||
+    (sh?.lastAttachError ?? undefined) !== (mh.lastAttachError ?? undefined) ||
+    (sh?.partialGaps?.length ?? 0) !== (mh.partialGaps?.length ?? 0)
+  );
 }
 
 function bumpHealth(
@@ -352,7 +390,11 @@ export async function patchSession(
 
   if (next?.active) {
     const stats = await loadCaptureStats(next.id);
-    const debounce = Boolean(meta.session?.active && meta.session.id === next.id);
+    const debounce = Boolean(
+      meta.session?.active &&
+        meta.session.id === next.id &&
+        !healthAffectsPopup(meta.session, next),
+    );
     await updatePopupSnapshot(next, stats.count, { debounce });
   } else if (next) {
     cancelPopupDebounce();
@@ -381,7 +423,11 @@ export async function withSession(
     ? (captureStats.get(next.session.id)?.count ?? (await loadCaptureStats(next.session.id)).count)
     : 0;
   if (next.session?.active) {
-    const debounce = Boolean(data.session?.active && data.session.id === next.session.id);
+    const debounce = Boolean(
+      data.session?.active &&
+        data.session.id === next.session.id &&
+        !healthAffectsPopup(data.session, next.session),
+    );
     await updatePopupSnapshot(next.session, networkCount, { debounce });
   } else if (next.session) {
     cancelPopupDebounce();
@@ -418,7 +464,7 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
     await writePersistedMeta({ session });
   }
 
-  schedulePopupSnapshot(session, nextStats.count);
+  schedulePopupSnapshot(nextStats.count);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {

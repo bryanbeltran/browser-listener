@@ -116,6 +116,11 @@ function scheduleRecover(): void {
   recoverTimer = setTimeout(() => void tryRecover(), 500);
 }
 
+/** Retry CDP attach while a capture session is active (e.g. after SW restart). */
+export function scheduleDebuggerAttachRetry(): void {
+  scheduleRecover();
+}
+
 async function onDebuggerEvent(
   source: chrome.debugger.Debuggee,
   method: string,

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Listener",
-  "version": "0.3.20",
+  "version": "0.3.21",
   "description": "Collect and organize Facebook posts, comments, and reactions locally while you browse. Privacy-first ZIP export.",
   "permissions": [
     "storage",

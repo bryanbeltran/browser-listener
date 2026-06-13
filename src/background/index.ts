@@ -3,7 +3,9 @@ import { createSession, getActiveSession, stopSession } from "../capture/session
 import {
   attachDebugger,
   ensureDebuggerForSession,
+  isDebuggerAttachedToTab,
   registerDebuggerCapture,
+  scheduleDebuggerAttachRetry,
   setOnDebuggerCanceledByUser,
 } from "../capture/debugger-capture.js";
 import { registerWebRequestCapture } from "../capture/web-request-capture.js";
@@ -30,6 +32,9 @@ async function startWithConsent(
   resetReactionHydrationScheduler();
   try {
     await attachDebugger(tabId);
+    if (!isDebuggerAttachedToTab(tabId)) {
+      throw new Error("Debugger attach did not complete");
+    }
   } catch (err) {
     await stopSession();
     throw err;
@@ -52,7 +57,7 @@ async function recoverSession(): Promise<void> {
   try {
     await ensureDebuggerForSession();
   } catch {
-    /* partial recovery noted in health */
+    scheduleDebuggerAttachRetry();
   }
 }
 

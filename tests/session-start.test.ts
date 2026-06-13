@@ -42,6 +42,40 @@ describe("session start", () => {
     expect(ui.canExport).toBe(false);
   });
 
+  it("reconciles stale debugger health from session meta", async () => {
+    const session = sampleSession({
+      active: true,
+      id: "health-stale",
+      health: {
+        ...sampleSession().health,
+        debuggerAttached: true,
+        debuggerEverAttached: true,
+      },
+    });
+    await chrome.storage.local.set({
+      browserListenerSessionData: { session },
+      browserListenerActiveSessionId: session.id,
+      browserListenerPopupState: {
+        session: {
+          id: session.id,
+          active: true,
+          startedAt: session.startedAt,
+          health: {
+            debuggerAttached: false,
+            debuggerEverAttached: false,
+            partialGaps: [],
+            truncation: { network: 0 },
+          },
+        },
+        counts: { network: 5 },
+        canExport: false,
+      },
+    });
+
+    const ui = await readPopupStateForUi();
+    expect(ui.session?.health?.debuggerAttached).toBe(true);
+  });
+
   it("allows start when a stale active session exists in storage", async () => {
     const session = sampleSession({ active: true, id: "zombie-session" });
     await chrome.storage.local.set({
