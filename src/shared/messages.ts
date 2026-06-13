@@ -10,7 +10,7 @@ export const MessageType = {
 export type MessageTypeName = (typeof MessageType)[keyof typeof MessageType];
 
 export interface PopupStateResponse {
-  session: import("./types.js").CaptureSession | null;
+  session: import("./types.js").PopupSessionView | null;
   counts: {
     network: number;
   };

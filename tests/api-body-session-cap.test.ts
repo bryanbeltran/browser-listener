@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { API_BODY_LIMITS, tryReserveApiBodyBytes } from "../src/capture/api-body-capture.js";
-import { emptySessionData, writeSessionData } from "../src/persistence/store.js";
+import { tryReserveApiBodyBytes } from "../src/capture/api-body-capture.js";
+import { emptySessionData, readSessionData, writeSessionData } from "../src/persistence/store.js";
 import { sampleSession } from "./helpers/fixtures.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 
-describe("api body session cap", () => {
+describe("api body byte accounting", () => {
   beforeEach(async () => {
     installChromeStorageMock();
     await writeSessionData({
@@ -17,9 +17,10 @@ describe("api body session cap", () => {
     uninstallChromeStorageMock();
   });
 
-  it("reserves bytes until session cap is exceeded", async () => {
-    const chunk = API_BODY_LIMITS.perSession - 100;
-    expect(await tryReserveApiBodyBytes(chunk)).toBe(true);
-    expect(await tryReserveApiBodyBytes(200)).toBe(false);
+  it("tracks stored bytes without a session cap", async () => {
+    expect(await tryReserveApiBodyBytes(5_000_000)).toBe(true);
+    expect(await tryReserveApiBodyBytes(5_000_000)).toBe(true);
+    const data = await readSessionData();
+    expect(data.session?.health.apiBodyBytesStored).toBe(10_000_000);
   });
 });

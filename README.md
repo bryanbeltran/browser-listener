@@ -158,7 +158,7 @@ Facebook parsing runs automatically at export via `src/enrichers/facebook-groups
 
 ## API limits
 
-- GraphQL bodies only on `facebook.com` paths, size-capped per response and session.
+- GraphQL bodies only on `facebook.com` paths (full response stored; subject to `chrome.storage` quota).
 - Debugger banner visible while attached.
 - MV3 service worker may sleep; recovery paths documented above.
 

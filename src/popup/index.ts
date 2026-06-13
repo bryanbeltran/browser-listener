@@ -198,7 +198,11 @@ async function refresh(): Promise<void> {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.browserListenerSessionData || changes.browserListenerActiveSessionId) {
+  if (
+    changes.browserListenerPopupState ||
+    changes.browserListenerSessionData ||
+    changes.browserListenerActiveSessionId
+  ) {
     void refresh();
   }
 });

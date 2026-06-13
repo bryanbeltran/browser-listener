@@ -1,5 +1,5 @@
 export interface CaptureOptions {
-  /** CDP capture of GraphQL request+response bodies on facebook.com (size-capped). */
+  /** CDP capture of GraphQL request+response bodies on facebook.com. */
   graphqlBodies: boolean;
 }
 
@@ -168,6 +168,22 @@ export interface CaptureSession {
   options: CaptureOptions;
   health: SessionHealth;
   tabClosedDuringCapture?: boolean;
+}
+
+/** Slim session fields for popup UI (stored without network / GraphQL bodies). */
+export interface PopupSessionView {
+  id: string;
+  active: boolean;
+  startedAt: number;
+  stoppedAt?: number;
+  tabClosedDuringCapture?: boolean;
+  health: Pick<SessionHealth, "debuggerAttached" | "partialGaps" | "truncation">;
+}
+
+export interface PopupStateSnapshot {
+  session: PopupSessionView | null;
+  counts: { network: number };
+  canExport: boolean;
 }
 
 export interface NetworkEntry {

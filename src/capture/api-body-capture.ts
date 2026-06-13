@@ -4,24 +4,6 @@ import { redactDeep, redactString } from "../redaction/engine.js";
 import { getActiveSession } from "./session-manager.js";
 import type { NetworkEntry } from "../shared/types.js";
 
-export const API_BODY_LIMITS = {
-  perResponse: 256 * 1024,
-  /** Feed / UFI GraphQL responses are often multi-line and >256KB. */
-  perResponseLarge: 1024 * 1024,
-  perSession: 50 * 1024 * 1024,
-} as const;
-
-const LARGE_BODY_QUERY =
-  /CometNewsFeedPagination|CometSinglePostDialog|CometUFI|Comments|StoriesPagination|GroupsCometFeed|CometGroupRoot|Story|permalink/i;
-
-export function apiBodyCapForRequest(postData?: string): number {
-  if (!postData) return API_BODY_LIMITS.perResponse;
-  const name = new URLSearchParams(postData).get("fb_api_req_friendly_name") ?? "";
-  return LARGE_BODY_QUERY.test(name)
-    ? API_BODY_LIMITS.perResponseLarge
-    : API_BODY_LIMITS.perResponse;
-}
-
 const API_BODY_PATHS = [/\/api\/graphql\/?$/i, /\/ajax\/bulk-route-definitions\/?$/i];
 
 export function shouldCaptureApiBody(url: string): boolean {
@@ -43,10 +25,11 @@ export function decodeCdpBody(body: string, base64Encoded: boolean): string {
   return new TextDecoder().decode(bytes);
 }
 
-export function prepareBodyForStorage(
-  raw: string,
-  maxBytes: number,
-): { text: string; byteLength: number; truncated: boolean } {
+export function prepareBodyForStorage(raw: string): {
+  text: string;
+  byteLength: number;
+  truncated: boolean;
+} {
   let text: string;
   try {
     text = JSON.stringify(redactDeep(JSON.parse(raw)));
@@ -54,44 +37,20 @@ export function prepareBodyForStorage(
     text = redactString(raw);
   }
 
-  const encoded = new TextEncoder().encode(text);
-  if (encoded.length <= maxBytes) {
-    return { text, byteLength: encoded.length, truncated: false };
-  }
-
-  const slice = encoded.slice(0, maxBytes);
-  return {
-    text: new TextDecoder().decode(slice),
-    byteLength: maxBytes,
-    truncated: true,
-  };
+  const byteLength = new TextEncoder().encode(text).length;
+  return { text, byteLength, truncated: false };
 }
 
+/** Track stored body bytes in session health (no cap). */
 export async function tryReserveApiBodyBytes(byteCount: number): Promise<boolean> {
   if (byteCount <= 0) return true;
-  let allowed = false;
   await withSession((data) => {
     if (!data.session?.active) return data;
     const health = data.session.health;
-    const stored = health.apiBodyBytesStored ?? 0;
-    if (stored + byteCount > API_BODY_LIMITS.perSession) {
-      health.apiBodiesSkippedSessionCap = (health.apiBodiesSkippedSessionCap ?? 0) + 1;
-      return data;
-    }
-    health.apiBodyBytesStored = stored + byteCount;
-    allowed = true;
+    health.apiBodyBytesStored = (health.apiBodyBytesStored ?? 0) + byteCount;
     return data;
   });
-  return allowed;
-}
-
-function markPerResponseTruncated(): void {
-  void withSession((data) => {
-    if (!data.session) return data;
-    const health = data.session.health;
-    health.apiBodiesPerResponseTruncated = (health.apiBodiesPerResponseTruncated ?? 0) + 1;
-    return data;
-  });
+  return true;
 }
 
 export async function captureApiBodiesForRequest(
@@ -106,21 +65,17 @@ export async function captureApiBodiesForRequest(
 
   const patch: Partial<NetworkEntry> = {};
   let totalBytes = 0;
-  let anyTruncated = false;
-  let responseCap = API_BODY_LIMITS.perResponse;
 
   try {
     const req = (await chrome.debugger.sendCommand({ tabId }, "Network.getRequestPostData", {
       requestId,
     })) as { postData?: string };
-    responseCap = apiBodyCapForRequest(req.postData);
     if (req.postData) {
-      const prep = prepareBodyForStorage(req.postData, responseCap);
+      const prep = prepareBodyForStorage(req.postData);
       patch.requestBody = prep.text;
-      patch.requestBodyTruncated = prep.truncated;
+      patch.requestBodyTruncated = false;
       patch.requestBodySize = prep.byteLength;
       totalBytes += prep.byteLength;
-      if (prep.truncated) anyTruncated = true;
     }
   } catch {
     /* GET or no post data */
@@ -131,12 +86,11 @@ export async function captureApiBodiesForRequest(
       requestId,
     })) as { body: string; base64Encoded: boolean };
     const raw = decodeCdpBody(res.body, res.base64Encoded);
-    const prep = prepareBodyForStorage(raw, responseCap);
+    const prep = prepareBodyForStorage(raw);
     patch.responseBody = prep.text;
-    patch.responseBodyTruncated = prep.truncated;
+    patch.responseBodyTruncated = false;
     patch.responseBodySize = prep.byteLength;
     totalBytes += prep.byteLength;
-    if (prep.truncated) anyTruncated = true;
     const headers = entry.responseHeaders ?? {};
     patch.contentType =
       headers["content-type"] ?? headers["Content-Type"] ?? "application/json";
@@ -148,9 +102,6 @@ export async function captureApiBodiesForRequest(
 
   if (totalBytes === 0) return {};
 
-  const reserved = await tryReserveApiBodyBytes(totalBytes);
-  if (!reserved) return {};
-
-  if (anyTruncated) markPerResponseTruncated();
+  await tryReserveApiBodyBytes(totalBytes);
   return patch;
 }

@@ -1,5 +1,10 @@
 import { redactDeep } from "../redaction/engine.js";
 import {
+  buildPopupStateSnapshot,
+  emptyPopupStateSnapshot,
+  POPUP_STATE_KEY,
+} from "./popup-state.js";
+import {
   emptyTruncation,
   pushWithCap,
   STORAGE_LIMITS,
@@ -7,6 +12,7 @@ import {
 import type {
   CaptureSession,
   NetworkEntry,
+  PopupStateSnapshot,
   SessionData,
   StorageTruncation,
 } from "../shared/types.js";
@@ -59,10 +65,31 @@ export async function readSessionData(): Promise<SessionData> {
 
 export async function writeSessionData(data: SessionData): Promise<void> {
   const payload: SessionData = redactDeep(data);
+  const activeId = payload.session?.active ? payload.session.id : null;
+  const popupSnapshot = buildPopupStateSnapshot({
+    ...payload,
+    session: payload.session
+      ? { ...payload.session, active: Boolean(activeId) }
+      : null,
+  });
   await chrome.storage.local.set({
     [STORAGE_KEY]: payload,
-    [ACTIVE_FLAG]: payload.session?.active ? payload.session.id : null,
+    [ACTIVE_FLAG]: activeId,
+    [POPUP_STATE_KEY]: popupSnapshot,
   });
+}
+
+/** Rebuild popup snapshot from full session (e.g. after extension update). */
+export async function syncPopupStateSnapshot(): Promise<void> {
+  const data = await readSessionData();
+  await chrome.storage.local.set({
+    [POPUP_STATE_KEY]: buildPopupStateSnapshot(data),
+  });
+}
+
+export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
+  const raw = await chrome.storage.local.get(POPUP_STATE_KEY);
+  return (raw[POPUP_STATE_KEY] as PopupStateSnapshot | undefined) ?? emptyPopupStateSnapshot();
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
@@ -133,5 +160,5 @@ export async function recordHealthGap(reason: string): Promise<void> {
 }
 
 export async function clearSessionData(): Promise<void> {
-  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG]);
+  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);
 }
