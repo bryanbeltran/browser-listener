@@ -216,12 +216,52 @@ export const KNOWN_REACTION_NAMES: Readonly<Record<string, string>> = {
   "814576161897161": "Angry",
 };
 
-/** Like, Love, and Haha — sampled when hydrating reactions before export. */
+/** Like, Love, and Haha — sampled during slow session hydration. */
 export const SAMPLE_REACTION_TYPE_IDS: Readonly<Record<string, string>> = {
   Like: KNOWN_REACTION_NAMES["1635855486666999"],
   Love: KNOWN_REACTION_NAMES["1678524932434102"],
   Haha: KNOWN_REACTION_NAMES["115940658764963"],
 };
+
+/** All standard reaction types for export-time hydration. */
+export const ALL_REACTION_TYPE_IDS: readonly string[] = Object.values(KNOWN_REACTION_NAMES);
+
+export function encodeCommentFeedbackId(
+  commentId: string,
+  legacyFbid?: string,
+): string | undefined {
+  const postId = decodeCommentPostId(commentId);
+  if (!postId) return undefined;
+  let fbid = legacyFbid;
+  if (!fbid) {
+    try {
+      const decoded = atob(commentId);
+      const m = decoded.match(/^(?:comment|feedback):(\d+)_(\d+)$/);
+      fbid = m?.[2];
+    } catch {
+      return undefined;
+    }
+  }
+  if (!fbid) return undefined;
+  return btoa(`feedback:${postId}_${fbid}`);
+}
+
+/** Higher = prefer when deduping reaction sources for the same user. */
+export function reactionSourcePriority(source: string): number {
+  if (/TabContentRefetch/i.test(source)) return 4;
+  if (isDialogReactionSource(source)) return 3;
+  if (isTooltipReactionSource(source)) return 1;
+  return 2;
+}
+
+export const TARGET_TEXT_MAX_LEN = 280;
+
+export function truncateTargetText(text?: string): string | undefined {
+  if (!text) return undefined;
+  const t = text.trim();
+  if (t.length <= TARGET_TEXT_MAX_LEN) return t;
+  return `${t.slice(0, TARGET_TEXT_MAX_LEN - 1)}…`;
+}
 
 export function reactionTypeFromId(
   reactionId: string | undefined,

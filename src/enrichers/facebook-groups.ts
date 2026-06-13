@@ -1,8 +1,14 @@
 import {
+  backfillAuthorIds,
+  dedupePeopleById,
+  enrichReactionContext,
+} from "./facebook-identity.js";
+import {
   commentLegacyKey,
   collectReactionNames,
   decodeCommentPostId,
   decodeFeedbackTarget,
+  encodeCommentFeedbackId,
   extractCommentsFromPartialJson,
   extractMediaFromAttachments,
   extractStoryTextsFromPartialJson,
@@ -14,12 +20,15 @@ import {
   groupPermalinkUrl,
   inferFacebookSurface,
   isDialogReactionSource,
+  isTooltipReactionSource,
   parseGraphqlLines,
   permalinkPostId,
   postIdFromFacebookUrl,
   preferCommentId,
+  reactionSourcePriority,
   reactionTypeFromId,
   shareFromAttachedStory,
+  truncateTargetText,
 } from "./facebook-parse.js";
 import type {
   FacebookComment,
@@ -54,8 +63,8 @@ function parseFormBody(body?: string): Record<string, string> {
   return out;
 }
 
-function personKey(id: string, name: string): string {
-  return `${id}:${name}`;
+function personKey(id: string): string {
+  return id;
 }
 
 function postKey(id: string): string {
@@ -334,21 +343,27 @@ function consolidateReactionBucket(
   }
 
   const out: FacebookReaction[] = [...unmatched];
-  for (const [key, list] of byKey) {
+  for (const [, list] of byKey) {
     const dialog = list.filter((r) => isDialogReactionSource(r.source));
-    const chosen = dialog.length > 0 ? dialog : list;
+    const pool = dialog.length > 0 ? dialog : list;
+    const ranked = [...pool].sort((a, b) => {
+      const bySource = reactionSourcePriority(b.source) - reactionSourcePriority(a.source);
+      if (bySource !== 0) return bySource;
+      return (b.reactionType ? 1 : 0) - (a.reactionType ? 1 : 0);
+    });
     const seen = new Set<string>();
-    for (const reaction of chosen) {
+    for (const reaction of ranked) {
       if (seen.has(reaction.userId)) continue;
       seen.add(reaction.userId);
       out.push(reaction);
     }
-    if (dialog.length === 0 && list.length > 0) {
+    const tooltipOnly = dialog.length === 0 && list.some((r) => isTooltipReactionSource(r.source));
+    if (tooltipOnly) {
       const total = list[0]?.reactionCount;
       const captured = seen.size;
       if (total != null && total > captured) {
         hints.push(
-          `${hintPrefix} ${key}: only reaction tooltip captured (${captured}/${total}) — open full reactions dialog for complete list`,
+          `${hintPrefix} ${list[0]?.postId ?? list[0]?.commentId ?? "?"}: only reaction tooltip captured (${captured}/${total}) — open full reactions dialog for complete list`,
         );
       }
     }
@@ -470,6 +485,7 @@ function linkPostsToComments(
           : matched.length,
       linkedComments: matched.map((c) => ({
         id: c.id,
+        authorId: c.authorId,
         authorName: c.authorName,
         text: c.text,
         createdAt: c.createdAt,
@@ -553,8 +569,17 @@ export function extractFacebookGroupActivity(
 
   const addPerson = (p: Omit<FacebookPerson, "source"> & { source: string }) => {
     if (!p.id || !p.name) return;
-    const key = personKey(p.id, p.name);
-    if (!people.has(key)) people.set(key, p);
+    const key = personKey(p.id);
+    const existing = people.get(key);
+    if (!existing) {
+      people.set(key, p);
+      return;
+    }
+    people.set(key, {
+      ...existing,
+      name: p.name.length > existing.name.length ? p.name : existing.name,
+      url: p.url ?? existing.url,
+    });
   };
 
   const addGroup = (
@@ -637,6 +662,7 @@ export function extractFacebookGroupActivity(
       authorName: normalized.authorName ?? existing.authorName,
       authorId: normalized.authorId ?? existing.authorId,
       postId: normalized.postId ?? existing.postId,
+      feedbackId: normalized.feedbackId ?? existing.feedbackId,
       createdAt: normalized.createdAt ?? existing.createdAt,
     });
   };
@@ -811,9 +837,18 @@ export function extractFacebookGroupActivity(
               typeof node.legacy_token === "string" ? node.legacy_token : undefined;
             const legacyFbid =
               typeof node.legacy_fbid === "string" ? node.legacy_fbid : undefined;
+            const feedbackObj =
+              node.feedback && typeof node.feedback === "object"
+                ? (node.feedback as Record<string, unknown>)
+                : undefined;
+            const feedbackId =
+              typeof feedbackObj?.id === "string"
+                ? feedbackObj.id
+                : encodeCommentFeedbackId(node.id, legacyFbid);
             addComment(
               {
                 id: node.id,
+                feedbackId,
                 text,
                 authorId,
                 authorName,
@@ -915,15 +950,29 @@ export function extractFacebookGroupActivity(
     [...groups.values()],
     opts.tabUrl,
   );
+  const dedupedPeople = dedupePeopleById([...people.values()]);
+  const { posts: postsWithAuthors, comments: commentsWithAuthors } = backfillAuthorIds(
+    linkedPosts,
+    linkedComments,
+    dedupedPeople,
+  );
+  const reactionsWithContext = enrichReactionContext(
+    mergedReactions,
+    postsWithAuthors,
+    commentsWithAuthors,
+  ).map((r) => ({
+    ...r,
+    targetText: truncateTargetText(r.targetText),
+  }));
   const uniqueWarnings = [...new Set([...parseWarnings, ...reactionHints])];
 
   return {
     groups: [...groups.values()],
     members: [...members.values()],
-    people: [...people.values()],
-    posts: linkedPosts,
-    comments: linkedComments,
-    reactions: mergedReactions,
+    people: dedupedPeople,
+    posts: postsWithAuthors,
+    comments: commentsWithAuthors,
+    reactions: reactionsWithContext,
     graphqlQueryHints: [...queryHints.values()].sort((a, b) => b.count - a.count),
     sessionPermalink: opts.tabUrl?.includes("/permalink/") ? opts.tabUrl : undefined,
     parseWarnings: uniqueWarnings.length ? uniqueWarnings : undefined,

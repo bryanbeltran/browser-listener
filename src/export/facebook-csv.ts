@@ -1,4 +1,8 @@
 import type { FacebookGroupActivity } from "../shared/types.js";
+import {
+  buildUserActivityCsv,
+  buildUserActivityJson,
+} from "./user-activity.js";
 
 function escCsv(value: string | number | undefined): string {
   const s = value == null ? "" : String(value);
@@ -37,6 +41,7 @@ export function buildFacebookCsvFiles(
         "id",
         "postId",
         "feedbackId",
+        "authorId",
         "authorName",
         "text",
         "url",
@@ -55,6 +60,7 @@ export function buildFacebookCsvFiles(
         p.id,
         p.postId,
         p.feedbackId,
+        p.authorId,
         p.authorName,
         p.text,
         p.url,
@@ -82,6 +88,9 @@ export function buildFacebookCsvFiles(
         "commentId",
         "target",
         "feedbackId",
+        "targetAuthorId",
+        "targetPostId",
+        "targetText",
         "reactionCount",
         "source",
       ],
@@ -93,6 +102,9 @@ export function buildFacebookCsvFiles(
         r.commentId,
         r.target,
         r.feedbackId,
+        r.targetAuthorId,
+        r.targetPostId,
+        r.targetText,
         r.reactionCount,
         r.source,
       ]),
@@ -101,16 +113,27 @@ export function buildFacebookCsvFiles(
 
   if (activity.comments.length) {
     files["csv/comments.csv"] = toCsv(
-      ["id", "postId", "authorName", "text", "reactionCount", "source"],
+      ["id", "postId", "feedbackId", "authorId", "authorName", "text", "reactionCount", "source"],
       activity.comments.map((c) => [
         c.id,
         c.postId,
+        c.feedbackId,
+        c.authorId,
         c.authorName,
         c.text,
         c.reactionCount,
         c.source,
       ]),
     );
+  }
+
+  if (
+    activity.posts.length ||
+    activity.comments.length ||
+    activity.reactions.length
+  ) {
+    files["csv/user-activity.csv"] = buildUserActivityCsv(activity);
+    files["signals.json"] = buildUserActivityJson(activity);
   }
 
   return files;

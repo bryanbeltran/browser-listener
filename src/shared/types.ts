@@ -84,6 +84,7 @@ export interface FacebookPost {
   commentCount?: number;
   linkedComments?: {
     id: string;
+    authorId?: string;
     authorName?: string;
     text?: string;
     createdAt?: number;
@@ -97,6 +98,7 @@ export interface FacebookPost {
 
 export interface FacebookComment {
   id: string;
+  feedbackId?: string;
   text?: string;
   authorId?: string;
   authorName?: string;
@@ -117,6 +119,26 @@ export interface FacebookReaction {
   userName: string;
   reactionType?: string;
   reactionCount?: number;
+  source: string;
+  /** Author of the post or comment that was reacted to. */
+  targetAuthorId?: string;
+  /** Truncated text of the reacted-to post or comment. */
+  targetText?: string;
+  /** Post id of the reacted-to content (post or parent of comment). */
+  targetPostId?: string;
+}
+
+/** Flat edge for classifiers — one observable user action. */
+export interface FacebookUserActivitySignal {
+  userId?: string;
+  userName?: string;
+  actionType: "post" | "comment" | "reaction";
+  targetId?: string;
+  targetType?: "post" | "comment" | "reaction";
+  text?: string;
+  reactionType?: string;
+  postId?: string;
+  commentId?: string;
   source: string;
 }
 

@@ -80,6 +80,19 @@ describe("reaction hydration", () => {
     );
   });
 
+  it("skips already-hydrated posts when selecting next target", () => {
+    const posts: FacebookPost[] = [
+      { id: "a", postId: "a", feedbackId: "fb-a", reactionCount: 2, source: "x" },
+      { id: "b", postId: "b", feedbackId: "fb-b", reactionCount: 40, source: "x" },
+    ];
+    const chosen = selectNextPostForHydration(posts, [], {
+      hotFeedbackIds: new Set(),
+      hydratedPostIds: new Set(["a"]),
+      skipDialogCoverage: true,
+    });
+    expect(chosen?.id).toBe("b");
+  });
+
   it("TabContentRefetch fixture responses produce typed post reactions", () => {
     const network = loadFacebookFixture("feed").network;
     const activity = extractFacebookGroupActivity(network, { tabUrl: GROUP_FEED });
