@@ -13,10 +13,13 @@ describe("export manifest", () => {
     expect(paths).not.toContain("timeline.json");
   });
 
-  it("buildExportManifest records privacy flags", () => {
+  it("buildExportManifest records privacy flags and extension version", () => {
     const data = leakySessionData();
+    data.session!.extensionVersion = "0.3.21";
     const manifest = buildExportManifest(data, baseManifestFiles());
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
+    expect(manifest.version).toBe("0.3.21");
+    expect(manifest.extensionVersion).toBe("0.3.21");
   });
 });

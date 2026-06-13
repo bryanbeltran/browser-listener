@@ -1,4 +1,5 @@
 import type { SessionData, TraceSummary } from "../shared/types.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
 
 export function buildTraceSummary(data: SessionData): TraceSummary {
   const fb = data.enrichments?.facebookGroups;
@@ -6,6 +7,7 @@ export function buildTraceSummary(data: SessionData): TraceSummary {
   const stopped = data.session?.stoppedAt;
   return {
     sessionId: data.session?.id ?? "none",
+    extensionVersion: data.session?.extensionVersion ?? getExtensionVersion(),
     startedAt: started,
     stoppedAt: stopped,
     durationMs: (stopped ?? Date.now()) - started,

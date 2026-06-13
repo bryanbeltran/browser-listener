@@ -6,6 +6,7 @@ import {
   setSession,
   withSession,
 } from "../persistence/store.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
 import { resetHydrationIndex } from "./hydration-index.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
@@ -29,11 +30,12 @@ export async function createSession(
 ): Promise<CaptureSession> {
   const session: CaptureSession = {
     id: crypto.randomUUID(),
-    active: true,
+    active: false,
     consentedAt: Date.now(),
     startedAt: Date.now(),
     tabId,
     tabUrl,
+    extensionVersion: getExtensionVersion(),
     options: { ...DEFAULT_CAPTURE_OPTIONS, ...options },
     health: newHealth(),
   };
@@ -44,6 +46,20 @@ export async function createSession(
     network: [],
   }));
   return session;
+}
+
+/** Mark session active after debugger attach succeeds (not before). */
+export async function activateCaptureSession(): Promise<CaptureSession | null> {
+  let activated: CaptureSession | null = null;
+  await withSession((data) => {
+    if (!data.session || data.session.active) {
+      activated = data.session;
+      return data;
+    }
+    activated = { ...data.session, active: true };
+    return { ...data, session: activated };
+  });
+  return activated;
 }
 
 export async function stopSession(opts?: { tabClosed?: boolean }): Promise<CaptureSession | null> {

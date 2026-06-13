@@ -15,11 +15,14 @@ describe("session start", () => {
     uninstallChromeStorageMock();
   });
 
-  it("writes popup snapshot immediately when capture starts", async () => {
-    const { createSession } = await import("../src/capture/session-manager.js");
+  it("writes popup snapshot immediately when capture is activated", async () => {
+    const { createSession, activateCaptureSession } = await import("../src/capture/session-manager.js");
     await createSession(42, "https://www.facebook.com/groups/test", {});
+    let snapshot = await readPopupStateSnapshot();
+    expect(snapshot.session?.active).toBe(false);
 
-    const snapshot = await readPopupStateSnapshot();
+    await activateCaptureSession();
+    snapshot = await readPopupStateSnapshot();
     expect(snapshot.session?.active).toBe(true);
     expect(snapshot.counts.network).toBe(0);
   });
@@ -83,8 +86,9 @@ describe("session start", () => {
       browserListenerActiveSessionId: session.id,
     });
 
-    const { createSession } = await import("../src/capture/session-manager.js");
+    const { createSession, activateCaptureSession } = await import("../src/capture/session-manager.js");
     const next = await createSession(7, "https://www.facebook.com/groups/test", {});
+    await activateCaptureSession();
 
     expect(next.id).not.toBe(session.id);
     const ui = await readPopupStateForUi();

@@ -1,12 +1,15 @@
 import type { ArtifactManifestEntry, ExportManifest, SessionData } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
 
 export function buildExportManifest(
   data: SessionData,
   files: ArtifactManifestEntry[],
 ): ExportManifest {
+  const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
   return {
-    version: "0.2.0",
+    version: extensionVersion,
+    extensionVersion,
     sessionId: data.session?.id ?? "none",
     exportedAt: Date.now(),
     privacy: { localOnly: true, remoteUpload: false },

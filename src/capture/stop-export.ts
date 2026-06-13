@@ -5,6 +5,7 @@ import {
 } from "./debugger-capture.js";
 import { runExportReactionHydration } from "./reaction-hydration.js";
 import { getActiveSession, stopSession, updateSessionTabUrl } from "./session-manager.js";
+import { readSessionMeta } from "../persistence/store.js";
 import { prepareZipExport } from "../export/orchestrator.js";
 import { downloadZipFromWorker } from "../export/download.js";
 import type { TraceSummary } from "../shared/types.js";
@@ -18,9 +19,10 @@ type ZipExportBundle = {
 let stopExportPromise: Promise<ZipExportBundle | null> | null = null;
 
 async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
-  const session = await getActiveSession();
+  const active = await getActiveSession();
+  const session = active ?? (await readSessionMeta());
 
-  if (session?.tabId != null) {
+  if (session?.tabId != null && session.active) {
     try {
       const tab = await chrome.tabs.get(session.tabId);
       if (tab.url) await updateSessionTabUrl(tab.url);
@@ -37,8 +39,10 @@ async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
   if (session) {
     await flushPendingApiBodyCaptures();
     await snapshotDebuggerHealthForExport();
-    await stopSession();
-    await detachDebugger();
+    if (session.active) {
+      await stopSession();
+      await detachDebugger();
+    }
   }
 
   return prepareZipExport();

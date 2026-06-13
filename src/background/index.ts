@@ -1,5 +1,10 @@
 import { MessageType } from "../shared/messages.js";
-import { createSession, getActiveSession, stopSession } from "../capture/session-manager.js";
+import {
+  activateCaptureSession,
+  createSession,
+  getActiveSession,
+  stopSession,
+} from "../capture/session-manager.js";
 import {
   attachDebugger,
   ensureDebuggerForSession,
@@ -35,8 +40,9 @@ async function startWithConsent(
     if (!isDebuggerAttachedToTab(tabId)) {
       throw new Error("Debugger attach did not complete");
     }
+    await activateCaptureSession();
   } catch (err) {
-    await stopSession();
+    await clearSessionData();
     throw err;
   }
 }
@@ -56,8 +62,15 @@ async function recoverSession(): Promise<void> {
   if (!shouldRecover || !session) return;
   try {
     await ensureDebuggerForSession();
+    if (!isDebuggerAttachedToTab(session.tabId)) {
+      throw new Error("Debugger attach did not complete on recovery");
+    }
   } catch {
-    scheduleDebuggerAttachRetry();
+    if (session.health.debuggerEverAttached) {
+      scheduleDebuggerAttachRetry();
+      return;
+    }
+    await stopSession();
   }
 }
 

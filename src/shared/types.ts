@@ -196,6 +196,8 @@ export interface CaptureSession {
   stoppedAt?: number;
   tabId: number;
   tabUrl?: string;
+  /** Extension build active when the session was created. */
+  extensionVersion?: string;
   options: CaptureOptions;
   health: SessionHealth;
   tabClosedDuringCapture?: boolean;
@@ -257,7 +259,9 @@ export interface ArtifactManifestEntry {
 }
 
 export interface ExportManifest {
+  /** Extension version at export time. */
   version: string;
+  extensionVersion: string;
   sessionId: string;
   exportedAt: number;
   privacy: { localOnly: true; remoteUpload: false };
@@ -268,6 +272,7 @@ export interface ExportManifest {
 
 export interface TraceSummary {
   sessionId: string;
+  extensionVersion?: string;
   startedAt: number;
   stoppedAt?: number;
   durationMs: number;
