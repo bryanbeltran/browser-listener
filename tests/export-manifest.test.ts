@@ -1,28 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { baseManifestFiles, buildExportManifest } from "../src/export/manifest-builder.js";
-import { sampleSession, leakySessionData } from "./helpers/fixtures.js";
+import { leakySessionData } from "./helpers/fixtures.js";
 
 describe("export manifest", () => {
-  it("includes required core artifacts", () => {
-    const files = baseManifestFiles(sampleSession().options);
-    const paths = files.map((f) => f.path);
+  it("lists core Facebook export files", () => {
+    const paths = baseManifestFiles(true, true, ["csv/posts.csv"]).map((f) => f.path);
     expect(paths).toContain("report.html");
-    expect(paths).toContain("network.har");
-    expect(paths).toContain("timeline.json");
-    expect(files.filter((f) => f.enabled).length).toBeGreaterThan(5);
+    expect(paths).toContain("trace-summary.json");
+    expect(paths).toContain("group-activity.json");
+    expect(paths).toContain("graphql-captures.json");
+    expect(paths).not.toContain("network.har");
+    expect(paths).not.toContain("timeline.json");
   });
 
-  it("marks optional artifacts disabled by default", () => {
-    const files = baseManifestFiles(sampleSession().options);
-    const screen = files.find((f) => f.path.includes("screen"));
-    expect(screen?.enabled).toBe(false);
-    expect(screen?.optional).toBe(true);
-  });
-
-  it("buildExportManifest records privacy flags", () => {
+  it("buildExportManifest records privacy flags and extension version", () => {
     const data = leakySessionData();
-    const manifest = buildExportManifest(data, baseManifestFiles(data.session!.options));
+    data.session!.extensionVersion = "0.3.21";
+    const manifest = buildExportManifest(data, baseManifestFiles());
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
+    expect(manifest.version).toBe("0.3.21");
+    expect(manifest.extensionVersion).toBe("0.3.21");
   });
 });

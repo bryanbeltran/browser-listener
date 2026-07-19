@@ -11,11 +11,11 @@ export function listEnrichers(): SessionEnricher[] {
   return [...enrichers];
 }
 
+/** Run all registered enrichers at export time. */
 export async function applyEnrichers(data: SessionData): Promise<SessionData> {
-  const ids = data.session?.options?.enricherIds ?? [];
   let out = data;
   for (const e of enrichers) {
-    if (ids.includes(e.id)) out = await e.enrich(out);
+    out = await e.enrich(out);
   }
   return out;
 }

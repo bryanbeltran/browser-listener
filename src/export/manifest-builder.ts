@@ -1,60 +1,60 @@
-import type { ArtifactManifestEntry, CaptureOptions, ExportManifest, SessionData } from "../shared/types.js";
+import type { ArtifactManifestEntry, ExportManifest, SessionData } from "../shared/types.js";
+import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
 
 export function buildExportManifest(
   data: SessionData,
   files: ArtifactManifestEntry[],
 ): ExportManifest {
+  const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
   return {
-    version: "0.2.0",
+    version: extensionVersion,
+    extensionVersion,
     sessionId: data.session?.id ?? "none",
     exportedAt: Date.now(),
     privacy: { localOnly: true, remoteUpload: false },
-    options: data.session?.options ?? {
-      screenRecording: false,
-      tabAudio: false,
-      staticAssetBodies: false,
-      enricherIds: [],
-    },
+    options: data.session?.options ?? DEFAULT_CAPTURE_OPTIONS,
     files,
     health: data.session?.health ?? {
       debuggerAttached: false,
+      debuggerEverAttached: false,
       debuggerDetachCount: 0,
       serviceWorkerRestarts: 0,
       partialGaps: [],
       persistenceErrors: [],
-      eventCounts: {},
-      truncation: { console: 0, network: 0, timeline: 0, userActions: 0 },
+      truncation: { network: 0 },
     },
   };
 }
 
-export function baseManifestFiles(options: CaptureOptions): ArtifactManifestEntry[] {
+export function baseManifestFiles(
+  includeGroupActivity = false,
+  includeGraphqlCaptures = false,
+  csvPaths: string[] = [],
+): ArtifactManifestEntry[] {
   return [
     { path: "report.html", kind: "report", optional: false, enabled: true },
     { path: "trace-summary.json", kind: "json", optional: false, enabled: true },
-    { path: "network.har", kind: "har", optional: false, enabled: true },
-    { path: "timeline.json", kind: "timeline", optional: false, enabled: true },
-    { path: "console.json", kind: "json", optional: false, enabled: true },
-    { path: "diagnostics.json", kind: "json", optional: false, enabled: true },
     { path: "export-manifest.json", kind: "json", optional: false, enabled: true },
-    { path: "repro-recipe.txt", kind: "other", optional: false, enabled: true },
     {
-      path: "artifacts/screen.webm",
-      kind: "video",
+      path: "group-activity.json",
+      kind: "json",
       optional: true,
-      enabled: options.screenRecording,
+      enabled: includeGroupActivity,
     },
     {
-      path: "artifacts/audio.webm",
-      kind: "audio",
+      path: "graphql-captures.json",
+      kind: "json",
       optional: true,
-      enabled: options.tabAudio,
+      enabled: includeGraphqlCaptures,
     },
-    {
-      path: "artifacts/static-bodies/",
-      kind: "asset",
-      optional: true,
-      enabled: options.staticAssetBodies,
-    },
+    ...csvPaths.map(
+      (path): ArtifactManifestEntry => ({
+        path,
+        kind: "json",
+        optional: true,
+        enabled: true,
+      }),
+    ),
   ];
 }

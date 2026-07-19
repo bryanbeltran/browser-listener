@@ -9,7 +9,7 @@ export function sampleSession(overrides: Partial<CaptureSession> = {}): CaptureS
     startedAt: Date.now() - 60_000,
     stoppedAt: Date.now(),
     tabId: 1,
-    tabUrl: "https://example.com/app",
+    tabUrl: "https://www.facebook.com/groups/example",
     options: { ...DEFAULT_CAPTURE_OPTIONS },
     health: {
       debuggerAttached: true,
@@ -17,8 +17,7 @@ export function sampleSession(overrides: Partial<CaptureSession> = {}): CaptureS
       serviceWorkerRestarts: 0,
       partialGaps: [],
       persistenceErrors: [],
-      eventCounts: {},
-      truncation: { console: 0, network: 0, timeline: 0, userActions: 0 },
+      truncation: { network: 0 },
     },
     ...overrides,
   };
@@ -27,25 +26,14 @@ export function sampleSession(overrides: Partial<CaptureSession> = {}): CaptureS
 export function leakySessionData(): SessionData {
   return {
     session: sampleSession(),
-    timeline: [],
-    console: [
-      {
-        id: "c1",
-        sessionId: "test-session-1",
-        timestamp: Date.now(),
-        level: "log",
-        args: ["token=super-secret-jwt-value"],
-        url: "https://example.com?access_token=leak-me",
-      },
-    ],
     network: [
       {
         id: "n1",
         sessionId: "test-session-1",
         requestId: "req-1",
         timestamp: Date.now(),
-        url: "https://api.example.com/data?api_key=SECRET123",
-        method: "GET",
+        url: "https://www.facebook.com/api/graphql/?api_key=SECRET123",
+        method: "POST",
         type: "xhr",
         requestHeaders: {
           Authorization: "Bearer eyJhbG.secret.payload",
@@ -54,29 +42,10 @@ export function leakySessionData(): SessionData {
         responseHeaders: {
           "Set-Cookie": "id_token=should-not-export",
         },
+        requestBody: "doc_id=1&access_token=leak-me",
+        responseBody: '{"data":{"viewer":{"token":"super-secret-jwt-value"}}}',
         statusCode: 200,
-      },
-    ],
-    userActions: [
-      {
-        id: "u1",
-        sessionId: "test-session-1",
-        timestamp: Date.now(),
-        type: "input",
-        target: "input#password",
-        valueSummary: "hunter2",
-        url: "https://example.com",
-      },
-    ],
-    diagnostics: [],
-    domSnapshots: [
-      {
-        id: "d1",
-        sessionId: "test-session-1",
-        timestamp: Date.now(),
-        url: "https://example.com",
-        htmlSummary: '<input type="password" value="hunter2" />',
-        nodeCount: 1,
+        bodyCaptured: true,
       },
     ],
   };

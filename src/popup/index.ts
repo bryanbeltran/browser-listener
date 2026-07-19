@@ -1,123 +1,223 @@
 import { MessageType } from "../shared/messages.js";
-import type { PopupStateResponse } from "../shared/messages.js";
+import type { ExportEntityCounts, ExportZipResponse } from "../shared/messages.js";
+import { base64ToUint8 } from "../shared/bytes.js";
+import { downloadZipFromPage } from "../export/download.js";
 import { hasTruncation } from "../persistence/limits.js";
+import type { PopupStateResponse } from "../shared/messages.js";
+import { readPopupState } from "./popup-state.js";
+import { sendMessageWithTimeout } from "./messaging.js";
 
-const consentPanel = document.getElementById("consent-panel")!;
-const activePanel = document.getElementById("active-panel")!;
-const exportPanel = document.getElementById("export-panel")!;
-const consentCheck = document.getElementById("consent-check") as HTMLInputElement;
-const btnStart = document.getElementById("btn-start") as HTMLButtonElement;
-const btnStopExport = document.getElementById("btn-stop-export") as HTMLButtonElement;
-const btnExport = document.getElementById("btn-export") as HTMLButtonElement;
-const btnNewSession = document.getElementById("btn-new-session") as HTMLButtonElement;
-const statusEl = document.getElementById("status")!;
-const healthHint = document.getElementById("health-hint")!;
-const exportStatus = document.getElementById("export-status")!;
-const exportHint = document.getElementById("export-hint")!;
-const cConsole = document.getElementById("c-console")!;
-const cNetwork = document.getElementById("c-network")!;
-const cActions = document.getElementById("c-actions")!;
-const eConsole = document.getElementById("e-console")!;
-const eNetwork = document.getElementById("e-network")!;
-const eActions = document.getElementById("e-actions")!;
+const EMPTY_STATE: PopupStateResponse = {
+  session: null,
+  counts: { network: 0 },
+  canExport: false,
+};
 
-async function send<T>(type: string, extra: object = {}): Promise<T> {
-  return chrome.runtime.sendMessage({ type, ...extra }) as Promise<T>;
+function el<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
 }
+
+const loadingPanel = el("loading-panel");
+const startPanel = el("start-panel");
+const activePanel = el("active-panel");
+const exportPanel = el("export-panel");
+const btnStart = el<HTMLButtonElement>("btn-start");
+const btnStop = el<HTMLButtonElement>("btn-stop");
+const btnNewSession = el<HTMLButtonElement>("btn-new-session");
+const statusEl = el("status");
+const healthHint = el("health-hint");
+const exportStatus = el("export-status");
+const exportHint = el("export-hint");
+const exportEntities = el("export-entities");
+const startError = el("start-error");
+const cNetwork = el("c-network");
+const eNetwork = el("e-network");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
-  const t = session?.health.truncation;
+  const t = session?.health?.truncation;
   if (!t || !hasTruncation(t)) return "";
-  return `Truncated: console −${t.console}, network −${t.network}, timeline −${t.timeline}, actions −${t.userActions}`;
+  return `Truncated: network −${t.network}`;
 }
 
-function render(state: PopupStateResponse): void {
+function debuggerHealthHint(session: PopupStateResponse["session"]): string {
+  if (!session) return "";
+  const dbg = session.health?.debuggerAttached ?? false;
+  const gaps = session.health?.partialGaps ?? [];
+  const attachErr = session.health?.lastAttachError;
+  const attachGap = gaps.find((g) => g.reason.startsWith("debugger_attach_failed"));
+  if (dbg) return "Debugger attached — GraphQL body capture active";
+  if (attachErr) return `Attach failed: ${attachErr}`;
+  if (attachGap) {
+    return attachGap.reason.replace(/^debugger_attach_failed:\s*/, "Attach failed: ");
+  }
+  if (gaps.length) {
+    return `Health: ${gaps.length} gap(s) logged; metadata-only fallback`;
+  }
+  return "Debugger not attached — metadata-only fallback";
+}
+
+function formatEntityCounts(counts: ExportEntityCounts): string {
+  return `${counts.posts} posts · ${counts.comments} comments · ${counts.reactions} reactions`;
+}
+
+function showExportEntities(counts?: ExportEntityCounts): void {
+  if (!exportEntities) return;
+  if (!counts) {
+    exportEntities.classList.add("hidden");
+    exportEntities.textContent = "";
+    return;
+  }
+  exportEntities.textContent = formatEntityCounts(counts);
+  exportEntities.classList.remove("hidden");
+}
+
+let lastExportCounts: ExportEntityCounts | undefined;
+
+function applyExportResult(res: ExportZipResponse): void {
+  if (res.counts) lastExportCounts = res.counts;
+  showExportEntities(lastExportCounts);
+  setText(exportHint, `Saved ${res.filename ?? "export"}`);
+}
+
+function showStartError(message: string): void {
+  if (!startError) return;
+  if (message) {
+    startError.textContent = message;
+    startError.classList.remove("hidden");
+  } else {
+    startError.textContent = "";
+    startError.classList.add("hidden");
+  }
+}
+
+function setText(node: HTMLElement | null, text: string): void {
+  if (node) node.textContent = text;
+}
+
+function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true): void {
   const active = state.session?.active ?? false;
   const canExport = state.canExport;
 
-  consentPanel.classList.toggle("hidden", active || canExport);
-  activePanel.classList.toggle("hidden", !active);
-  exportPanel.classList.toggle("hidden", active || !canExport);
+  loadingPanel?.classList.toggle("hidden", loaded);
+  startPanel?.classList.toggle("hidden", !loaded || active || canExport);
+  activePanel?.classList.toggle("hidden", !loaded || !active);
+  exportPanel?.classList.toggle("hidden", !loaded || active || !canExport);
 
-  cConsole.textContent = String(state.counts.console);
-  cNetwork.textContent = String(state.counts.network);
-  cActions.textContent = String(state.counts.userActions);
-  eConsole.textContent = String(state.counts.console);
-  eNetwork.textContent = String(state.counts.network);
-  eActions.textContent = String(state.counts.userActions);
+  setText(cNetwork, String(state.counts.network));
+  setText(eNetwork, String(state.counts.network));
 
   if (active && state.session) {
-    statusEl.textContent = `Session ${state.session.id.slice(0, 8)}…`;
-    const gaps = state.session.health.partialGaps.length;
-    const dbg = state.session.health.debuggerAttached;
+    setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
     const trunc = truncationHint(state.session);
-    healthHint.textContent =
-      trunc ||
-      (gaps
-        ? `Health: ${gaps} gap(s) logged${dbg ? "" : "; debugger not attached (webRequest fallback)"}`
-        : dbg
-          ? "Debugger attached"
-          : "Using webRequest metadata fallback");
+    setText(healthHint, trunc || debuggerHealthHint(state.session));
   }
 
   if (canExport && state.session) {
-    exportStatus.textContent = state.session.tabClosedDuringCapture
-      ? "Tab closed — partial capture ready"
-      : "Capture ended — ready to export";
+    setText(
+      exportStatus,
+      state.session.tabClosedDuringCapture
+        ? "Tab closed — partial capture ready"
+        : "Capture ended",
+    );
+    showExportEntities(lastExportCounts);
     const trunc = truncationHint(state.session);
-    const gaps = state.session.health.partialGaps.length;
-    exportHint.textContent =
-      trunc || (gaps ? `${gaps} capture gap(s) recorded in export health` : "Local ZIP only");
+    const gaps = state.session.health?.partialGaps?.length ?? 0;
+    if (!lastExportCounts) {
+      setText(exportHint, trunc || (gaps ? `${gaps} capture gap(s) recorded` : "ZIP downloaded locally"));
+    }
+  } else {
+    showExportEntities(undefined);
   }
 
-  btnStart.disabled = !consentCheck.checked || active;
+  if (btnStart) btnStart.disabled = active;
 }
 
-consentCheck.addEventListener("change", () => {
-  btnStart.disabled = !consentCheck.checked;
-});
+async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
+  if (!res.ok) throw new Error(res.error ?? "Export failed");
+  if (!res.zipBase64 || !res.filename) throw new Error("Export returned no file");
+  const zip = base64ToUint8(res.zipBase64);
+  await downloadZipFromPage(zip, res.filename);
+}
 
-btnStart.addEventListener("click", async () => {
-  if (!consentCheck.checked) return;
+btnStart?.addEventListener("click", async () => {
   btnStart.disabled = true;
+  showStartError("");
   try {
-    await send(MessageType.CONSENT_AND_START, { consented: true });
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) throw new Error("No active tab — open Facebook first");
+    const res = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.CONSENT_AND_START, tabId: tab.id },
+      30_000,
+    );
+    if (!res?.ok) throw new Error(res.error ?? "Could not start capture");
     await refresh();
-  } catch {
-    btnStart.disabled = false;
-  }
-});
-
-btnStopExport.addEventListener("click", async () => {
-  btnStopExport.disabled = true;
-  try {
-    await send(MessageType.STOP_AND_EXPORT);
-    consentCheck.checked = false;
+  } catch (err) {
+    showStartError(err instanceof Error ? err.message : "Could not start capture");
     await refresh();
-  } finally {
-    btnStopExport.disabled = false;
   }
 });
 
-btnExport.addEventListener("click", async () => {
-  btnExport.disabled = true;
+let captureActive = false;
+let stopRequested = false;
+
+async function requestStopAndExport(): Promise<void> {
+  if (stopRequested) return;
+  const state = await readPopupState();
+  if (!state.session?.active) return;
+
+  stopRequested = true;
+  if (btnStop) btnStop.disabled = true;
+  setText(healthHint, "Preparing ZIP…");
   try {
-    await send(MessageType.EXPORT_CAPTURE);
-  } finally {
-    btnExport.disabled = false;
+    const res = await sendMessageWithTimeout<ExportZipResponse>(
+      { type: MessageType.STOP_AND_EXPORT },
+      180_000,
+    );
+    await downloadFromResponse(res);
+    captureActive = false;
+    applyExportResult(res);
+    await refresh();
+  } catch (err) {
+    stopRequested = false;
+    if (btnStop) btnStop.disabled = false;
+    setText(healthHint, err instanceof Error ? err.message : "Export failed");
   }
-});
+}
 
-btnNewSession.addEventListener("click", async () => {
-  await send(MessageType.DISCARD_CAPTURE);
-  consentCheck.checked = false;
+btnStop?.addEventListener("click", () => void requestStopAndExport());
+
+btnNewSession?.addEventListener("click", async () => {
+  lastExportCounts = undefined;
+  await sendMessageWithTimeout({ type: MessageType.DISCARD_CAPTURE }, 30_000);
   await refresh();
 });
 
 async function refresh(): Promise<void> {
-  const state = await send<PopupStateResponse>(MessageType.GET_STATE);
-  render(state);
+  try {
+    const state = await readPopupState();
+    captureActive = state.session?.active ?? false;
+    if (!captureActive) stopRequested = false;
+    render(state, true);
+  } catch {
+    captureActive = false;
+    render({ session: null, counts: EMPTY_STATE.counts, canExport: false }, true);
+    setText(healthHint, "Could not read session storage");
+  }
 }
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (
+    changes.browserListenerPopupState ||
+    changes.browserListenerSessionData ||
+    changes.browserListenerActiveSessionId
+  ) {
+    void refresh();
+  }
+});
+
+const versionEl = el("app-version");
+if (versionEl) versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
 
 void refresh();
 setInterval(() => void refresh(), 2000);

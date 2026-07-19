@@ -2,21 +2,23 @@ import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
   readSessionData,
+  readSessionMeta,
   setSession,
   withSession,
 } from "../persistence/store.js";
-import { recordTimeline } from "./timeline.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
+import { resetHydrationIndex } from "./hydration-index.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
 function newHealth(): CaptureSession["health"] {
   return {
     debuggerAttached: false,
+    debuggerEverAttached: false,
     debuggerDetachCount: 0,
     serviceWorkerRestarts: 0,
     partialGaps: [],
     persistenceErrors: [],
-    eventCounts: {},
     truncation: emptyTruncation(),
   };
 }
@@ -28,26 +30,36 @@ export async function createSession(
 ): Promise<CaptureSession> {
   const session: CaptureSession = {
     id: crypto.randomUUID(),
-    active: true,
+    active: false,
     consentedAt: Date.now(),
     startedAt: Date.now(),
     tabId,
     tabUrl,
+    extensionVersion: getExtensionVersion(),
     options: { ...DEFAULT_CAPTURE_OPTIONS, ...options },
     health: newHealth(),
   };
   await clearSessionData();
+  resetHydrationIndex();
   await withSession(() => ({
     session,
-    timeline: [],
-    console: [],
     network: [],
-    userActions: [],
-    diagnostics: [],
-    domSnapshots: [],
   }));
-  await recordTimeline(session.id, "system", "session_start", `Capture started on tab ${tabId}`);
   return session;
+}
+
+/** Mark session active after debugger attach succeeds (not before). */
+export async function activateCaptureSession(): Promise<CaptureSession | null> {
+  let activated: CaptureSession | null = null;
+  await withSession((data) => {
+    if (!data.session || data.session.active) {
+      activated = data.session;
+      return data;
+    }
+    activated = { ...data.session, active: true };
+    return { ...data, session: activated };
+  });
+  return activated;
 }
 
 export async function stopSession(opts?: { tabClosed?: boolean }): Promise<CaptureSession | null> {
@@ -60,11 +72,17 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
     tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
   };
   await setSession(stopped);
-  await recordTimeline(stopped.id, "system", "session_stop", "Capture stopped");
   return stopped;
 }
 
 export async function getActiveSession(): Promise<CaptureSession | null> {
-  const data = await readSessionData();
-  return data.session?.active ? data.session : null;
+  const session = await readSessionMeta();
+  return session?.active ? session : null;
+}
+
+export async function updateSessionTabUrl(tabUrl: string): Promise<void> {
+  await withSession((data) => {
+    if (!data.session?.active || data.session.tabUrl === tabUrl) return data;
+    return { ...data, session: { ...data.session, tabUrl } };
+  });
 }

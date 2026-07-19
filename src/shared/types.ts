@@ -1,37 +1,185 @@
-export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
-
 export interface CaptureOptions {
-  screenRecording: boolean;
-  tabAudio: boolean;
-  staticAssetBodies: boolean;
-  enricherIds: string[];
+  /** CDP capture of GraphQL request+response bodies on facebook.com. */
+  graphqlBodies: boolean;
+  /** During capture, slowly sample Like/Love/Haha reactors for engaged posts. */
+  reactionHydration: boolean;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
-  screenRecording: false,
-  tabAudio: false,
-  staticAssetBodies: false,
-  enricherIds: [],
+  graphqlBodies: true,
+  reactionHydration: true,
 };
 
+/** Where a post was encountered while browsing. */
+export type FacebookSurface = "group" | "timeline" | "page" | "unknown";
+
+/** Planned: manual or ML-assisted stance on a cause (not populated yet). */
+export interface FacebookCauseTag {
+  cause: string;
+  stance: "pro" | "anti" | "neutral";
+}
+
+export interface FacebookLinkedReaction {
+  userId: string;
+  userName: string;
+  /** Like, Love, etc. when captured from GraphQL. */
+  reactionType?: string;
+}
+
+export interface FacebookGroupSummary {
+  id: string;
+  name?: string;
+  url?: string;
+  /** e.g. "53.8K members" from group_member_profiles */
+  memberCountText?: string;
+}
+
+export interface FacebookGroupMember {
+  userId: string;
+  name: string;
+  groupId?: string;
+  groupName?: string;
+  role?: string;
+  source: string;
+}
+
+export interface FacebookMediaAttachment {
+  id?: string;
+  type: "photo" | "video" | "link" | "other";
+  caption?: string;
+  width?: number;
+  height?: number;
+}
+
+export interface FacebookShareInfo {
+  originalPostId?: string;
+  originalAuthorName?: string;
+  originalText?: string;
+  originalUrl?: string;
+}
+
+export interface FacebookPerson {
+  id: string;
+  name: string;
+  url?: string;
+  source: string;
+}
+
+export interface FacebookPost {
+  id: string;
+  postId?: string;
+  feedbackId?: string;
+  text?: string;
+  authorId?: string;
+  authorName?: string;
+  createdAt?: number;
+  url?: string;
+  surface?: FacebookSurface;
+  groupId?: string;
+  groupName?: string;
+  source: string;
+  partialParse?: boolean;
+  reactionCount?: number;
+  linkedReactions?: FacebookLinkedReaction[];
+  commentCount?: number;
+  linkedComments?: {
+    id: string;
+    authorId?: string;
+    authorName?: string;
+    text?: string;
+    createdAt?: number;
+    reactionCount?: number;
+    linkedReactions?: FacebookLinkedReaction[];
+  }[];
+  media?: FacebookMediaAttachment[];
+  share?: FacebookShareInfo;
+  causeTags?: FacebookCauseTag[];
+}
+
+export interface FacebookComment {
+  id: string;
+  feedbackId?: string;
+  text?: string;
+  authorId?: string;
+  authorName?: string;
+  createdAt?: number;
+  postId?: string;
+  source: string;
+  reactionCount?: number;
+  linkedReactions?: FacebookLinkedReaction[];
+  causeTags?: FacebookCauseTag[];
+}
+
+export interface FacebookReaction {
+  feedbackId?: string;
+  postId?: string;
+  commentId?: string;
+  target?: "post" | "comment";
+  userId: string;
+  userName: string;
+  reactionType?: string;
+  reactionCount?: number;
+  source: string;
+  /** Author of the post or comment that was reacted to. */
+  targetAuthorId?: string;
+  /** Truncated text of the reacted-to post or comment. */
+  targetText?: string;
+  /** Post id of the reacted-to content (post or parent of comment). */
+  targetPostId?: string;
+}
+
+/** Flat edge for classifiers — one observable user action. */
+export interface FacebookUserActivitySignal {
+  userId?: string;
+  userName?: string;
+  /** True when userId is a stable Facebook numeric id (not name-only inference). */
+  userIdResolved: boolean;
+  actionType: "post" | "comment" | "reaction";
+  targetId?: string;
+  targetType?: "post" | "comment" | "reaction";
+  text?: string;
+  reactionType?: string;
+  postId?: string;
+  commentId?: string;
+  source: string;
+}
+
+export interface FacebookGroupActivity {
+  groups: FacebookGroupSummary[];
+  members: FacebookGroupMember[];
+  people: FacebookPerson[];
+  posts: FacebookPost[];
+  comments: FacebookComment[];
+  reactions: FacebookReaction[];
+  graphqlQueryHints: { docId: string; friendlyName?: string; count: number }[];
+  sessionPermalink?: string;
+  parseWarnings?: string[];
+}
+
+export interface SessionEnrichments {
+  facebookGroups?: FacebookGroupActivity;
+}
+
 export interface StorageTruncation {
-  console: number;
   network: number;
-  timeline: number;
-  userActions: number;
 }
 
 export interface SessionHealth {
   debuggerAttached: boolean;
+  /** True if CDP attach completed successfully at any point this session (export snapshot). */
+  debuggerEverAttached?: boolean;
   debuggerDetachCount: number;
   lastDetachAt?: number;
   lastRecoverAt?: number;
   serviceWorkerRestarts: number;
   partialGaps: HealthGap[];
   persistenceErrors: string[];
-  eventCounts: Record<string, number>;
-  /** Count of entries dropped due to storage caps */
+  /** Last chrome.debugger.attach / Network.enable failure, if any. */
+  lastAttachError?: string;
   truncation: StorageTruncation;
+  apiBodyBytesStored?: number;
+  apiBodiesSkippedSessionCap?: number;
+  apiBodiesPerResponseTruncated?: number;
 }
 
 export interface HealthGap {
@@ -48,35 +196,30 @@ export interface CaptureSession {
   stoppedAt?: number;
   tabId: number;
   tabUrl?: string;
+  /** Extension build active when the session was created. */
+  extensionVersion?: string;
   options: CaptureOptions;
   health: SessionHealth;
   tabClosedDuringCapture?: boolean;
 }
 
-export interface TimelineEvent {
+/** Slim session fields for popup UI (stored without network / GraphQL bodies). */
+export interface PopupSessionView {
   id: string;
-  sessionId: string;
-  timestamp: number;
-  category: "console" | "network" | "user" | "navigation" | "diagnostic" | "system";
-  type: string;
-  summary: string;
-  frameId?: string;
-  tabId?: number;
-  payloadRef?: string;
+  active: boolean;
+  startedAt: number;
+  stoppedAt?: number;
+  tabClosedDuringCapture?: boolean;
+  health: Pick<
+    SessionHealth,
+    "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation" | "lastAttachError"
+  >;
 }
 
-export interface ConsoleEntry {
-  id: string;
-  sessionId: string;
-  timestamp: number;
-  level: ConsoleLevel;
-  args: string[];
-  url: string;
-  frameUrl?: string;
-  frameId?: string;
-  tabId?: number;
-  stack?: string;
-  source?: "content" | "debugger";
+export interface PopupStateSnapshot {
+  session: PopupSessionView | null;
+  counts: { network: number };
+  canExport: boolean;
 }
 
 export interface NetworkEntry {
@@ -97,79 +240,28 @@ export interface NetworkEntry {
   fromCache?: boolean;
   error?: string;
   timing?: { start: number; end?: number; durationMs?: number };
-  /** Only when staticAssetBodies opt-in and CDP body captured */
+  requestBody?: string;
+  responseBody?: string;
+  requestBodyTruncated?: boolean;
+  responseBodyTruncated?: boolean;
+  contentType?: string;
   requestBodySize?: number;
   responseBodySize?: number;
   bodyCaptured?: boolean;
 }
 
-export interface UserAction {
-  id: string;
-  sessionId: string;
-  timestamp: number;
-  type: "click" | "submit" | "input" | "change" | "route" | "visibility";
-  target?: string;
-  valueSummary?: string;
-  url: string;
-  frameUrl?: string;
-  frameId?: string;
-  tabId?: number;
-}
-
-export interface FrameInfo {
-  /** Chrome frameId as string (from CDP or message sender) */
-  frameId: string;
-  parentId?: string;
-  url: string;
-  name?: string;
-  crossOrigin: boolean;
-  timestamp: number;
-}
-
-export interface RouteState {
-  href: string;
-  pathname: string;
-  search: string;
-  hash: string;
-  title: string;
-}
-
-export interface DomSnapshot {
-  id: string;
-  sessionId: string;
-  timestamp: number;
-  url: string;
-  frameUrl?: string;
-  frameId?: string;
-  htmlSummary: string;
-  nodeCount: number;
-}
-
-export interface PerformanceSignals {
-  timestamp: number;
-  navigation?: PerformanceNavigationTiming;
-  paint?: { fp?: number; fcp?: number };
-  resourceCount?: number;
-}
-
-export interface DiagnosticsBundle {
-  frames: FrameInfo[];
-  route: RouteState;
-  performance?: PerformanceSignals;
-  visibility: DocumentVisibilityState;
-  capturedAt: number;
-}
-
 export interface ArtifactManifestEntry {
   path: string;
-  kind: "report" | "har" | "json" | "timeline" | "audio" | "video" | "asset" | "other";
+  kind: "report" | "json" | "other";
   optional: boolean;
   enabled: boolean;
   bytes?: number;
 }
 
 export interface ExportManifest {
+  /** Extension version at export time. */
   version: string;
+  extensionVersion: string;
   sessionId: string;
   exportedAt: number;
   privacy: { localOnly: true; remoteUpload: false };
@@ -180,27 +272,24 @@ export interface ExportManifest {
 
 export interface TraceSummary {
   sessionId: string;
+  extensionVersion?: string;
   startedAt: number;
   stoppedAt?: number;
   durationMs: number;
   counts: {
-    console: number;
     network: number;
-    userActions: number;
-    timeline: number;
-    domSnapshots: number;
+    posts: number;
+    comments: number;
+    reactions: number;
   };
   health: SessionHealth;
 }
 
 export interface SessionData {
   session: CaptureSession | null;
-  timeline: TimelineEvent[];
-  console: ConsoleEntry[];
   network: NetworkEntry[];
-  userActions: UserAction[];
-  diagnostics: DiagnosticsBundle[];
-  domSnapshots: DomSnapshot[];
+  /** Populated at export time by enrichers (not persisted during capture). */
+  enrichments?: SessionEnrichments;
 }
 
 export interface RedactionRule {

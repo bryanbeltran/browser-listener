@@ -17,14 +17,16 @@ describe("download export orchestration", () => {
     await writeSessionData({
       ...emptySessionData(),
       session: sampleSession(),
-      console: [
+      network: [
         {
-          id: "1",
+          id: "n1",
           sessionId: "test-session-1",
+          requestId: "req-1",
           timestamp: Date.now(),
-          level: "log",
-          args: ["ok"],
-          url: "https://example.com",
+          url: "https://www.facebook.com/api/graphql/",
+          method: "POST",
+          type: "xhr",
+          statusCode: 200,
         },
       ],
     });

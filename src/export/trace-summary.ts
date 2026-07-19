@@ -1,29 +1,30 @@
 import type { SessionData, TraceSummary } from "../shared/types.js";
+import { getExtensionVersion } from "../shared/extension-version.js";
 
 export function buildTraceSummary(data: SessionData): TraceSummary {
-  const s = data.session;
-  const stopped = s?.stoppedAt ?? Date.now();
-  const started = s?.startedAt ?? stopped;
+  const fb = data.enrichments?.facebookGroups;
+  const started = data.session?.startedAt ?? Date.now();
+  const stopped = data.session?.stoppedAt;
   return {
-    sessionId: s?.id ?? "none",
+    sessionId: data.session?.id ?? "none",
+    extensionVersion: data.session?.extensionVersion ?? getExtensionVersion(),
     startedAt: started,
-    stoppedAt: s?.stoppedAt,
-    durationMs: Math.max(0, stopped - started),
+    stoppedAt: stopped,
+    durationMs: (stopped ?? Date.now()) - started,
     counts: {
-      console: data.console.length,
       network: data.network.length,
-      userActions: data.userActions.length,
-      timeline: data.timeline.length,
-      domSnapshots: data.domSnapshots.length,
+      posts: fb?.posts.length ?? 0,
+      comments: fb?.comments.length ?? 0,
+      reactions: fb?.reactions.length ?? 0,
     },
-    health: s?.health ?? {
+    health: data.session?.health ?? {
       debuggerAttached: false,
+      debuggerEverAttached: false,
       debuggerDetachCount: 0,
       serviceWorkerRestarts: 0,
       partialGaps: [],
       persistenceErrors: [],
-      eventCounts: {},
-      truncation: { console: 0, network: 0, timeline: 0, userActions: 0 },
+      truncation: { network: 0 },
     },
   };
 }

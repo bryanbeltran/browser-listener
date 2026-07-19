@@ -1,0 +1,14 @@
+#!/bin/sh
+# Rebuild dist/ after each commit so chrome://extensions can reload without manual npm run build.
+# Skip: SKIP_POST_COMMIT_BUILD=1 git commit ...
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if [ "$SKIP_POST_COMMIT_BUILD" = "1" ]; then
+  echo "post-commit: build skipped (SKIP_POST_COMMIT_BUILD=1)"
+  exit 0
+fi
+
+echo "post-commit: rebuilding dist/…"
+npm run build
+echo "post-commit: dist/ ready — reload extension in chrome://extensions"

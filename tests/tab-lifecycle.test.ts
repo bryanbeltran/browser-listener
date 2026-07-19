@@ -7,10 +7,6 @@ vi.mock("../src/capture/debugger-capture.js", () => ({
   detachDebugger: vi.fn(async () => {}),
 }));
 
-vi.mock("../src/background/broadcast.js", () => ({
-  broadcastCaptureState: vi.fn(async () => {}),
-}));
-
 describe("tab lifecycle", () => {
   beforeEach(() => {
     installChromeStorageMock();
@@ -26,14 +22,15 @@ describe("tab lifecycle", () => {
     await writeSessionData({
       ...emptySessionData(),
       session,
-      console: [
+      network: [
         {
-          id: "c1",
+          id: "n1",
           sessionId: session.id,
+          requestId: "r1",
           timestamp: Date.now(),
-          level: "log",
-          args: ["hello"],
-          url: "https://example.com",
+          url: "https://www.facebook.com/api/graphql/",
+          method: "POST",
+          type: "xhr",
         },
       ],
     });
@@ -44,7 +41,7 @@ describe("tab lifecycle", () => {
     const data = await readSessionData();
     expect(data.session?.active).toBe(false);
     expect(data.session?.tabClosedDuringCapture).toBe(true);
-    expect(data.console.length).toBe(1);
+    expect(data.network.length).toBe(1);
     expect(data.session?.health.partialGaps.some((g) => g.reason === "tab_closed")).toBe(true);
   });
 

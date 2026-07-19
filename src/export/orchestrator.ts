@@ -3,67 +3,79 @@ import { redactDeep } from "../redaction/engine.js";
 import { readSessionData } from "../persistence/store.js";
 import { generateReportHtml } from "../report/generate.js";
 import { buildExportManifest, baseManifestFiles } from "./manifest-builder.js";
-import { buildHar } from "./har.js";
 import { buildTraceSummary } from "./trace-summary.js";
-import { buildReproRecipe } from "./repro-recipe.js";
-import { buildZip, zipFileMapFromExport, sessionDiagnosticsJson } from "./zip-builder.js";
+import { buildFacebookCsvFiles } from "./facebook-csv.js";
+import { buildGraphqlCaptures } from "./graphql-captures.js";
+import { buildZip, zipFileMapFromExport } from "./zip-builder.js";
 import type { SessionData } from "../shared/types.js";
 
-export async function buildZipFromSessionData(data: SessionData): Promise<Uint8Array> {
+/** Redact and enrich session data for export (single enrich pass). */
+export async function processSessionForExport(data: SessionData): Promise<SessionData> {
   let processed = redactDeep(data);
   processed = redactDeep(await applyEnrichers(processed));
-  return buildZipBundle(processed);
+  return processed;
+}
+
+export async function buildZipFromSessionData(data: SessionData): Promise<Uint8Array> {
+  return buildZipBundle(await processSessionForExport(data));
 }
 
 async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
-
-  const pageUrl = data.session?.tabUrl ?? "about:blank";
+  const facebookActivity = data.enrichments?.facebookGroups;
+  const graphqlCaptures = buildGraphqlCaptures(data.network);
+  const csvFiles = facebookActivity ? buildFacebookCsvFiles(facebookActivity) : {};
   const files = baseManifestFiles(
-    data.session?.options ?? {
-      screenRecording: false,
-      tabAudio: false,
-      staticAssetBodies: false,
-      enricherIds: [],
-    },
+    Boolean(facebookActivity),
+    graphqlCaptures.length > 0,
+    Object.keys(csvFiles),
   );
 
   const bundle = {
     reportHtml: generateReportHtml(data),
     traceSummary: JSON.stringify(buildTraceSummary(data), null, 2),
-    har: JSON.stringify(buildHar(data.network, pageUrl), null, 2),
-    timeline: JSON.stringify(data.timeline, null, 2),
-    console: JSON.stringify(data.console, null, 2),
-    diagnostics: sessionDiagnosticsJson(data),
     manifest: JSON.stringify(buildExportManifest(data, files), null, 2),
-    repro: buildReproRecipe(data.userActions),
+    graphqlCaptures:
+      graphqlCaptures.length > 0
+        ? JSON.stringify(graphqlCaptures, null, 2)
+        : undefined,
+    groupActivity:
+      facebookActivity != null
+        ? JSON.stringify(facebookActivity, null, 2)
+        : undefined,
   };
 
-  return buildZip(zipFileMapFromExport(bundle));
+  const map = zipFileMapFromExport(bundle);
+  for (const [path, content] of Object.entries(csvFiles)) {
+    map[path] = content;
+  }
+  return buildZip(map);
 }
 
 export async function buildZipExport(): Promise<Uint8Array> {
   return buildZipFromSessionData(await readSessionData());
 }
 
-export async function downloadZipExport(): Promise<void> {
-  const zip = await buildZipExport();
-  const blob = new Blob([new Uint8Array(zip)], { type: "application/zip" });
-  const url = URL.createObjectURL(blob);
-  const data = await readSessionData();
-  const name = `browser-listener-${data.session?.id ?? "session"}-${Date.now()}.zip`;
-  try {
-    await chrome.downloads.download({ url, filename: name, saveAs: true });
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  }
+export function exportFilename(sessionId?: string | null): string {
+  return `browser-listener-${sessionId ?? "session"}-${Date.now()}.zip`;
 }
 
-/** Testable entry without Chrome downloads API */
-export async function buildZipExportBlob(): Promise<{ zip: Uint8Array; filename: string }> {
-  const zip = await buildZipExport();
+/** Build ZIP bytes + filename + entity counts for download in popup or background. */
+export async function prepareZipExport(): Promise<{
+  zip: Uint8Array;
+  filename: string;
+  counts: ReturnType<typeof buildTraceSummary>["counts"];
+}> {
   const data = await readSessionData();
+  const processed = await processSessionForExport(data);
+  const zip = await buildZipBundle(processed);
   return {
     zip,
-    filename: `browser-listener-${data.session?.id ?? "session"}-${Date.now()}.zip`,
+    filename: exportFilename(data.session?.id),
+    counts: buildTraceSummary(processed).counts,
   };
+}
+
+/** @deprecated Use prepareZipExport + downloadZipFromPage/Worker */
+export async function buildZipExportBlob(): Promise<{ zip: Uint8Array; filename: string }> {
+  return prepareZipExport();
 }
