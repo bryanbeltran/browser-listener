@@ -100,6 +100,12 @@ Reload the target tab after install. Open Facebook (group feed, timeline, or a p
 | **3** | **Classification readiness report** — field-level coverage in export (`coverage-report.json`): % posts/comments with `text` and `authorId`, % reactions with `targetText` and `reactionType`, tooltip vs dialog capture, `partialParse` and truncation gaps | Extension export | Next |
 | **4** | **Capture completeness** — close reaction gaps (post + comment), reduce `partialParse`, surface truncation in coverage report; see [Capture completeness](#capture-completeness) below | Extension capture | Next |
 
+#### Developer tooling
+
+| Priority | Feature |
+|----------|---------|
+| Next | Write network and console logs to disk during capture — structured output consumable by IDEs and AI assistants for local development |
+
 #### Capture & export (extension — supports #4)
 
 | Priority | Feature |
