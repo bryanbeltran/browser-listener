@@ -1,3 +1,4 @@
+import { captureProfileDefaults, inferCaptureProfile } from "../shared/types.js";
 import type { CoverageMetric, CoverageReport, SessionData } from "../shared/types.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 
@@ -23,6 +24,9 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
   const markers = data.markers ?? [];
   const requestBodies = network.filter((entry) => hasValue(entry.requestBody));
   const responseBodies = network.filter((entry) => hasValue(entry.responseBody));
+  const profile = inferCaptureProfile(data.session?.options);
+  const profileOptions = captureProfileDefaults(profile);
+  const hasExplicitProfile = data.session?.options?.profile != null;
   const gapReasons = [...new Set((health?.partialGaps ?? []).map((gap) => gap.reason))].sort();
   const truncation = health?.truncation;
   const partial = Boolean(
@@ -51,9 +55,14 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       pauseIntervals: data.session?.pauseIntervals ?? [],
     },
     policy: {
+      profile,
       redactionEnabled: data.session?.options?.redactionEnabled !== false,
-      captureBodies: data.session?.options?.captureBodies ?? false,
-      captureConsole: data.session?.options?.captureConsole ?? true,
+      captureBodies: hasExplicitProfile
+        ? profileOptions.captureBodies
+        : data.session?.options?.captureBodies ?? profileOptions.captureBodies,
+      captureConsole: hasExplicitProfile
+        ? profileOptions.captureConsole
+        : data.session?.options?.captureConsole ?? profileOptions.captureConsole,
       allowedOrigins: data.session?.options?.allowedOrigins ?? [],
     },
     totals: {

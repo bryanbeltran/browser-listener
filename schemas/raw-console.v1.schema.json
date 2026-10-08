@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/raw-console.v1.schema.json",
+  "title": "Browser Listener raw console v1",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "sessionId", "timestamp", "level", "text"],
+    "properties": {
+      "id": { "type": "string" },
+      "sessionId": { "type": "string" },
+      "timestamp": { "type": "integer", "minimum": 0 },
+      "level": { "type": "string" },
+      "text": { "type": "string" }
+    }
+  }
+}

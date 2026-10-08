@@ -77,6 +77,7 @@ describe("coverage report", () => {
     expect(report.source.tabUrl).toContain("example.test");
     expect(report.capture).toEqual({ paused: false, pauseIntervals: [] });
     expect(report.policy).toEqual({
+      profile: "network-console",
       redactionEnabled: true,
       captureBodies: false,
       captureConsole: true,

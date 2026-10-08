@@ -18,10 +18,17 @@ describe("E2E export pipeline", () => {
 
   it("offline report focuses on generic session evidence", async () => {
     const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
-    expect(files["report.html"]).toContain("Browser Listener");
-    expect(files["report.html"]).toContain("Evidence timeline");
-    expect(files["report.html"]).toContain("Copy citation");
-    expect(files["report.html"]).toContain("timeline-search");
+    const report = files["report.html"];
+    expect(report).toContain("Browser Listener");
+    expect(report).toContain("Evidence timeline");
+    expect(report).toContain("Copy citation");
+    expect(report).toContain("browser-listener://sample-export-session");
+    expect(report).toContain("data-repro-kind=");
+    expect(report).toContain("It will not replay automatically");
+    expect(report).toContain("timeline-search");
+    const script = report.split("<script>")[1]?.split("</script>")[0];
+    expect(script).toBeDefined();
+    expect(() => new Function(script!)).not.toThrow();
   });
 
   it("manifest asserts local-only privacy and generic coverage", async () => {
@@ -38,6 +45,7 @@ describe("E2E export pipeline", () => {
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
     expect(manifest.coverage.capture.pauseIntervals).toEqual([]);
     expect(manifest.coverage.policy.redactionEnabled).toBe(true);
+    expect(manifest.coverage.policy.profile).toBe("network-console");
     expect(har.log.version).toBe("1.2");
     expect(har.log.entries).toHaveLength(1);
     expect(har.log.entries[0].response.content.text).toContain('"items"');

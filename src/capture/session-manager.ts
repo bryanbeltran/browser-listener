@@ -10,8 +10,13 @@ import {
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { isCaptureableUrl, isOriginAllowed, normalizeOriginAllowlist } from "../shared/urls.js";
 import { loadRedactionConfig, readRedactionPreference } from "../persistence/preferences.js";
+import {
+  captureProfileDefaults,
+  DEFAULT_CAPTURE_OPTIONS,
+  inferCaptureProfile,
+  normalizeCaptureProfile,
+} from "../shared/types.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
-import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
 function newHealth(): CaptureSession["health"] {
   return {
@@ -33,6 +38,7 @@ export async function createSession(
   const allowedOrigins = normalizeOriginAllowlist(options.allowedOrigins);
   await loadRedactionConfig();
   const redactionEnabled = await readRedactionPreference();
+  const profile = normalizeCaptureProfile(inferCaptureProfile(options));
   const session: CaptureSession = {
     id: crypto.randomUUID(),
     active: false,
@@ -44,6 +50,8 @@ export async function createSession(
     options: {
       ...DEFAULT_CAPTURE_OPTIONS,
       ...options,
+      ...captureProfileDefaults(profile),
+      profile,
       ...(allowedOrigins == null ? {} : { allowedOrigins }),
       redactionEnabled,
     },

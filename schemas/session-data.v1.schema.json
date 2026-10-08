@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/session-data.v1.schema.json",
+  "title": "Browser Listener normalized session data v1",
+  "type": "object",
+  "required": ["session", "network", "navigation", "console", "markers"],
+  "properties": {
+    "session": { "type": ["object", "null"] },
+    "network": { "type": "array", "items": { "type": "object" } },
+    "navigation": { "type": "array", "items": { "type": "object" } },
+    "console": { "type": "array", "items": { "type": "object" } },
+    "markers": { "type": "array", "items": { "type": "object" } }
+  }
+}

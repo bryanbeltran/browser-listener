@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/export-manifest.v3.schema.json",
+  "title": "Browser Listener export manifest v3",
+  "type": "object",
+  "required": ["schemaVersion", "format", "version", "extensionVersion", "sessionId", "exportedAt", "privacy", "options", "files", "coverage", "health"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "format": { "const": "browser-listener" },
+    "version": { "type": "string" },
+    "extensionVersion": { "type": "string" },
+    "sessionId": { "type": "string" },
+    "exportedAt": { "type": "integer", "minimum": 0 },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "options": { "$ref": "#/$defs/options" },
+    "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+    "coverage": { "$ref": "coverage.v3.schema.json" },
+    "health": { "type": "object" }
+  },
+  "$defs": {
+    "privacy": {
+      "type": "object",
+      "required": ["schemaVersion", "redactionEnabled", "redactionRuleSetVersion", "audit", "captureBodies", "captureConsole", "scope", "localOnly", "remoteUpload"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "redactionEnabled": { "type": "boolean" },
+        "redactionRuleSetVersion": { "type": "string" },
+        "audit": { "type": "object" },
+        "captureBodies": { "type": "boolean" },
+        "captureConsole": { "type": "boolean" },
+        "scope": { "const": "active-tab" },
+        "localOnly": { "const": true },
+        "remoteUpload": { "const": false }
+      }
+    },
+    "options": {
+      "type": "object",
+      "required": ["profile", "captureBodies", "captureConsole", "redactionEnabled"],
+      "properties": {
+        "profile": { "enum": ["metadata", "network-console", "safe-bodies"] },
+        "captureBodies": { "type": "boolean" },
+        "captureConsole": { "type": "boolean" },
+        "redactionEnabled": { "type": "boolean" },
+        "allowedOrigins": { "type": "array", "items": { "type": "string", "format": "uri" } }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "kind", "optional", "enabled"],
+      "properties": {
+        "path": { "type": "string" },
+        "kind": { "enum": ["report", "har", "json", "other"] },
+        "optional": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

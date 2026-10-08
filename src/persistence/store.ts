@@ -38,6 +38,11 @@ import type {
   SessionData,
   StorageTruncation,
 } from "../shared/types.js";
+import {
+  captureProfileDefaults,
+  inferCaptureProfile,
+  normalizeCaptureProfile,
+} from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import { normalizeOriginAllowlist } from "../shared/urls.js";
 
@@ -109,11 +114,17 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
   } catch {
     allowedOrigins = [];
   }
+  const profile = normalizeCaptureProfile(inferCaptureProfile(session.options));
+  const profileDefaults = captureProfileDefaults(profile);
+  const hasExplicitProfile = session.options?.profile != null;
   return {
     ...session,
     options: {
-      captureBodies: session.options?.captureBodies ?? false,
-      captureConsole: session.options?.captureConsole ?? true,
+      ...profileDefaults,
+      ...session.options,
+      profile,
+      captureBodies: hasExplicitProfile ? profileDefaults.captureBodies : session.options?.captureBodies ?? profileDefaults.captureBodies,
+      captureConsole: hasExplicitProfile ? profileDefaults.captureConsole : session.options?.captureConsole ?? profileDefaults.captureConsole,
       redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
       ...(allowedOrigins == null ? {} : { allowedOrigins }),
     },

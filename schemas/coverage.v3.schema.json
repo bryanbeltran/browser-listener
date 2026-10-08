@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/coverage.v3.schema.json",
+  "title": "Browser Listener coverage report v3",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "source", "capture", "policy", "totals", "fields", "quality"],
+  "properties": {
+    "schemaVersion": { "const": 3 },
+    "generatedAt": { "type": "integer", "minimum": 0 },
+    "source": { "type": "object" },
+    "capture": {
+      "type": "object",
+      "required": ["paused", "pauseIntervals"],
+      "properties": {
+        "paused": { "type": "boolean" },
+        "pauseIntervals": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins"],
+      "properties": {
+        "profile": { "enum": ["metadata", "network-console", "safe-bodies"] },
+        "redactionEnabled": { "type": "boolean" },
+        "captureBodies": { "type": "boolean" },
+        "captureConsole": { "type": "boolean" },
+        "allowedOrigins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "totals": { "type": "object", "required": ["network", "navigation", "console", "markers", "requestBodies", "responseBodies"] },
+    "fields": { "type": "object" },
+    "quality": {
+      "type": "object",
+      "required": ["partial", "gapReasons"],
+      "properties": {
+        "partial": { "type": "boolean" },
+        "gapReasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

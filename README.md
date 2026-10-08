@@ -13,6 +13,7 @@ Start capture only after explicit user activation, reproduce a problem, stop cap
 - Browser navigation history.
 - Console logs, runtime exceptions, and browser log entries.
 - Pause/resume controls with recorded pause intervals.
+- Fixed capture profiles: Metadata only, Network + console, or opt-in Safe bodies.
 - Bounded storage with visible truncation and debugger health gaps.
 - Offline HTML report plus raw HAR and console artifacts.
 - ZIP inspector for CI, support, and local debugging workflows.
@@ -59,7 +60,7 @@ Redaction is enabled by default before persistence and again at export. The popu
 
 1. Popup grants explicit capture intent for current tab through `activeTab` and loads the persisted redaction preference.
 2. Service worker snapshots capture options, including redaction state, then creates session metadata and attaches CDP debugger.
-3. CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries. Pause temporarily suspends evidence capture while preserving the session.
+3. The selected profile fixes capture scope for the session; CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries. Pause temporarily suspends evidence capture while preserving the session.
 4. Storage keeps network data in IndexedDB and low-volume evidence in bounded local storage.
 5. Stop detaches CDP, snapshots health, builds four artifacts, and downloads ZIP locally.
 

@@ -51,6 +51,9 @@ function assertCoverage(coverage) {
     if (!coverage.policy || typeof coverage.policy !== "object") {
       throw new Error("Coverage capture policy is missing");
     }
+    if (!["metadata", "network-console", "safe-bodies"].includes(coverage.policy.profile)) {
+      throw new Error("Coverage capture profile is missing or unsupported");
+    }
     for (const key of ["redactionEnabled", "captureBodies", "captureConsole"]) {
       if (typeof coverage.policy[key] !== "boolean") {
         throw new Error(`Coverage policy field is missing: ${key}`);

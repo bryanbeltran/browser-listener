@@ -29,10 +29,13 @@
         <input type="checkbox" id="consent-checkbox" />
         <span>I have permission to capture this page and its visible activity.</span>
       </label>
-      <label class="checkbox">
-        <input type="checkbox" id="body-capture-checkbox" />
-        <span>Include safe JSON/text bodies (bounded; may contain page content).</span>
-      </label>
+      <label for="capture-profile" class="field-label">Capture profile</label>
+      <select id="capture-profile" class="text-input">
+        <option value="metadata">Metadata only — no console or bodies</option>
+        <option value="network-console" selected>Network + console</option>
+        <option value="safe-bodies">Safe bodies — bounded JSON/text bodies</option>
+      </select>
+      <p class="hint">The profile is fixed for this session. Safe bodies are opt-in and may contain page content.</p>
       <label for="scope-origins" class="field-label">Optional origin allowlist</label>
       <input id="scope-origins" class="text-input" type="text" placeholder="https://app.example.com, https://api.example.com" />
       <p class="hint">Leave blank to include the captured page and its dependencies. Exact HTTP(S) origins only.</p>

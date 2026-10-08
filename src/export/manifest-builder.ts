@@ -1,5 +1,9 @@
 import type { ArtifactManifestEntry, CoverageReport, ExportManifest, SessionData } from "../shared/types.js";
-import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
+import {
+  captureProfileDefaults,
+  DEFAULT_CAPTURE_OPTIONS,
+  inferCaptureProfile,
+} from "../shared/types.js";
 import { emptyTruncation } from "../persistence/limits.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { buildCoverageReport } from "./coverage.js";
@@ -22,6 +26,13 @@ export function buildExportManifest(
   exportedAt = coverage.generatedAt,
 ): ExportManifest {
   const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
+  const profile = inferCaptureProfile(data.session?.options);
+  const options = {
+    ...DEFAULT_CAPTURE_OPTIONS,
+    ...data.session?.options,
+    ...captureProfileDefaults(profile),
+    profile,
+  };
   return {
     schemaVersion: EXPORT_MANIFEST_SCHEMA_VERSION,
     format: "browser-listener",
@@ -33,14 +44,14 @@ export function buildExportManifest(
       schemaVersion: 1,
       redactionRuleSetVersion: REDACTION_RULE_SET_VERSION,
       audit: buildRedactionAudit(data),
-      captureBodies: data.session?.options?.captureBodies ?? false,
-      captureConsole: data.session?.options?.captureConsole ?? true,
+      captureBodies: options.captureBodies,
+      captureConsole: options.captureConsole,
       scope: "active-tab",
       localOnly: true,
       remoteUpload: false,
       redactionEnabled: data.session?.options?.redactionEnabled !== false,
     },
-    options: data.session?.options ?? DEFAULT_CAPTURE_OPTIONS,
+    options,
     files,
     coverage,
     health: data.session?.health ?? {

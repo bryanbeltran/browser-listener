@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/raw-har.v1.2.schema.json",
+  "title": "Browser Listener raw HAR 1.2",
+  "type": "object",
+  "required": ["log"],
+  "properties": {
+    "log": {
+      "type": "object",
+      "required": ["version", "creator", "pages", "entries"],
+      "properties": {
+        "version": { "const": "1.2" },
+        "creator": { "type": "object", "required": ["name", "version"] },
+        "pages": { "type": "array" },
+        "entries": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

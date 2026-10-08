@@ -30,11 +30,11 @@ flowchart LR
 
 ## Capture strategy
 
-1. Popup sends `CONSENT_AND_START` only after the user checks authorization.
-2. Background validates current tab is ordinary HTTP(S), creates metadata, and attaches CDP.
+1. Popup shows the effective capture profile and sends `CONSENT_AND_START` only after the user checks authorization.
+2. Background validates current tab is ordinary HTTP(S), snapshots the immutable profile and policy, then attaches CDP.
 3. CDP `Network.*` records network lifecycle. `Runtime.*` and `Log.entryAdded` record console evidence.
 4. `tabs.onUpdated` records top-frame URL changes for the explicitly captured tab.
-5. Pause/resume suspends debugger evidence and bounded auxiliary persistence; each interval is retained in session metadata.
+5. Pause/resume suspends debugger evidence and bounded auxiliary persistence; each interval is retained in session metadata. A profile cannot change after start.
 6. CDP detach and MV3 restart paths retry while the session remains active.
 
 There is no broad host monitoring or request interception fallback. CDP is authoritative while the user-visible debugger session is active.

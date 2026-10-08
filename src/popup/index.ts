@@ -6,7 +6,7 @@ import { hasTruncation } from "../persistence/limits.js";
 import { REDACTION_PREFERENCE_KEY } from "../persistence/preferences.js";
 import { REDACTION_CONFIG_KEY } from "../persistence/preferences.js";
 import type { PopupStateResponse } from "../shared/messages.js";
-import type { RedactionConfig } from "../shared/types.js";
+import type { CaptureProfile, RedactionConfig } from "../shared/types.js";
 import { readPopupState } from "./popup-state.js";
 import { sendMessageWithTimeout } from "./messaging.js";
 
@@ -27,7 +27,7 @@ const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
-const bodyCaptureCheckbox = el<HTMLInputElement>("body-capture-checkbox");
+const captureProfileSelect = el<HTMLSelectElement>("capture-profile");
 const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
 const redactionWarning = el("redaction-warning");
@@ -244,8 +244,7 @@ btnStart?.addEventListener("click", async () => {
         type: MessageType.CONSENT_AND_START,
         tabId: tab.id,
         options: {
-          captureBodies: bodyCaptureCheckbox?.checked ?? false,
-          captureConsole: true,
+          profile: (captureProfileSelect?.value || "network-console") as CaptureProfile,
           allowedOrigins: parseOriginList(scopeOriginsInput?.value),
         },
       },

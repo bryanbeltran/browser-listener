@@ -28,5 +28,6 @@ describe("export manifest", () => {
     expect(manifest.privacy.redactionRuleSetVersion).toBe("default-v1");
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
     expect(manifest.coverage.policy.redactionEnabled).toBe(true);
+    expect(manifest.coverage.policy.profile).toBe("network-console");
   });
 });

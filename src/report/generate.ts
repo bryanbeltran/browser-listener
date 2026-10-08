@@ -1,4 +1,6 @@
 import { buildCoverageReport } from "../export/coverage.js";
+import { buildBundleCitation, buildEvidenceCitation } from "../export/citations.js";
+import { buildReproductionSnippets } from "../export/reproduction.js";
 import { buildRedactionAudit } from "../redaction/audit.js";
 import type { CoverageReport, SessionData } from "../shared/types.js";
 
@@ -6,29 +8,51 @@ export function generateReportHtml(
   data: SessionData,
   coverage: CoverageReport = buildCoverageReport(data),
 ): string {
+  const bundleId = data.session?.id ?? "none";
+  const redactionEnabled = data.session?.options?.redactionEnabled !== false;
   const reportNetwork = data.network.map((entry) => {
     const copy = { ...entry };
     delete copy.requestBody;
     delete copy.responseBody;
-    return copy;
+    return {
+      ...copy,
+      citation: buildEvidenceCitation(bundleId, "raw.har", entry.id, coverage.schemaVersion),
+      reproduction: buildReproductionSnippets(entry, {
+        bundleId,
+        schemaVersion: coverage.schemaVersion,
+        redactionEnabled,
+      }),
+    };
   });
   const reportConsole = data.console.map((entry) => {
     const copy = { ...entry };
     delete copy.args;
     delete copy.stackTrace;
-    return copy;
+    return {
+      ...copy,
+      citation: buildEvidenceCitation(bundleId, "raw-console.json", entry.id, coverage.schemaVersion),
+    };
   });
+  const reportNavigation = data.navigation.map((entry) => ({
+    ...entry,
+    citation: buildEvidenceCitation(bundleId, "raw.har", entry.id, coverage.schemaVersion),
+  }));
+  const reportMarkers = (data.markers ?? []).map((entry) => ({
+    ...entry,
+    citation: buildEvidenceCitation(bundleId, "report.html", entry.id, coverage.schemaVersion),
+  }));
   const summary = {
     session: data.session,
+    bundleCitation: buildBundleCitation(bundleId, coverage.schemaVersion),
     coverage,
     privacy: {
-      redactionEnabled: data.session?.options?.redactionEnabled !== false,
+      redactionEnabled,
       audit: buildRedactionAudit(data),
     },
-    navigation: data.navigation,
+    navigation: reportNavigation,
     console: reportConsole,
     network: reportNetwork,
-    markers: data.markers ?? [],
+    markers: reportMarkers,
   };
   const json = JSON.stringify(summary).replace(/</g, "\\u003c");
 
@@ -118,6 +142,7 @@ coverageHtml+='<h3>Field coverage</h3>'+table(['Field','Present'],[
 coverageHtml+='<h3>Quality signals</h3>'+table(['Signal','Value'],Object.entries(c.quality).map(([key,value])=>[esc(key),esc(value)]));
 coverageHtml+='<p class="'+(c.quality.partial?'health-warn':'muted')+'"><strong>Completeness:</strong> '+(c.quality.partial?'Partial capture — review gaps before relying on absence.':'No recorded completeness gaps')+'</p>';
 coverageHtml+='<h3>Capture policy</h3>'+table(['Setting','Value'],[
+  ['Profile',c.policy?.profile||'unknown'],
   ['Redaction',c.policy?.redactionEnabled?'enabled':'disabled'],
   ['Request/response bodies',c.policy?.captureBodies?'enabled':'disabled'],
   ['Console capture',c.policy?.captureConsole?'enabled':'disabled'],
@@ -132,14 +157,18 @@ coverageHtml+='<h3>Pause intervals</h3>'+(pauses.length?table(['Started','Ended'
 document.getElementById('coverage').innerHTML=coverageHtml;
 
 const events=[
-  ...DATA.navigation.map(entry=>({time:entry.timestamp,type:'navigation',label:entry.title||entry.url,detail:entry.url})),
-  ...DATA.console.map(entry=>({time:entry.timestamp,type:'console '+entry.level,label:entry.text,detail:entry.url||entry.source||''})),
-  ...(DATA.markers||[]).map(entry=>({time:entry.timestamp,type:'marker',label:entry.note||entry.label,detail:entry.url||''})),
-  ...DATA.network.map(entry=>({time:entry.timestamp,type:'network',label:entry.method+' '+entry.type,detail:entry.statusCode+' '+entry.url})),
+  ...DATA.navigation.map(entry=>({id:entry.id,time:entry.timestamp,type:'navigation',label:entry.title||entry.url,detail:entry.url,citation:entry.citation})),
+  ...DATA.console.map(entry=>({id:entry.id,time:entry.timestamp,type:'console '+entry.level,label:entry.text,detail:entry.url||entry.source||'',citation:entry.citation})),
+  ...(DATA.markers||[]).map(entry=>({id:entry.id,time:entry.timestamp,type:'marker',label:entry.note||entry.label,detail:entry.url||'',citation:entry.citation})),
+  ...DATA.network.map(entry=>({id:entry.id,time:entry.timestamp,type:'network',label:entry.method+' '+entry.type,detail:entry.statusCode+' '+entry.url,citation:entry.citation,reproduction:entry.reproduction})),
 ].sort((a,b)=>a.time-b.time);
 let timelineHtml='<h2>Evidence timeline</h2><div class="search-controls"><label for="timeline-search"><strong>Filter evidence</strong></label><input id="timeline-search" type="search" placeholder="Search URL, console text, or event type" /><span id="search-count" class="muted" aria-live="polite"></span></div>';
-timelineHtml+='<table><thead><tr><th>Time</th><th>Type</th><th>Evidence</th><th>Source</th></tr></thead><tbody>';
-for(const event of events) timelineHtml+='<tr class="event-row"><td>'+esc(formatDate(event.time))+'</td><td>'+esc(event.type)+'</td><td>'+esc(event.label)+'</td><td>'+safeLink(event.detail)+'</td></tr>';
+timelineHtml+='<table><thead><tr><th>Time</th><th>Type</th><th>Evidence</th><th>Source</th><th>Actions</th></tr></thead><tbody>';
+for(const event of events){
+  const citationButton=event.citation?'<button type="button" class="action-button citation-button" data-citation="'+esc(event.citation.address)+'">Copy citation</button>':'';
+  const reproductionButtons=event.reproduction?['curl','fetch','httpie'].map(kind=>'<button type="button" class="action-button reproduction-button" data-repro-id="'+esc(event.id)+'" data-repro-kind="'+kind+'">Copy '+kind+'</button>').join(' '):'';
+  timelineHtml+='<tr class="event-row"><td>'+esc(formatDate(event.time))+'</td><td>'+esc(event.type)+'</td><td>'+esc(event.label)+'</td><td>'+safeLink(event.detail)+'</td><td>'+citationButton+' '+reproductionButtons+'</td></tr>';
+}
 timelineHtml+='</tbody></table>';
 document.getElementById('timeline').innerHTML=timelineHtml;
 
@@ -151,8 +180,24 @@ async function copyText(value){
   if(navigator.clipboard){await navigator.clipboard.writeText(value);return;}
   const area=document.createElement('textarea');area.value=value;area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();const copied=document.execCommand('copy');area.remove();if(!copied)throw new Error('clipboard unavailable');
 }
+for(const button of document.querySelectorAll('.citation-button')){
+  button.addEventListener('click',async()=>{
+    const value=button.getAttribute('data-citation')||'';
+    try{await copyText(value);button.textContent='Copied';}catch{button.textContent='Unavailable';}
+  });
+}
+for(const button of document.querySelectorAll('.reproduction-button')){
+  button.addEventListener('click',async()=>{
+    const id=button.getAttribute('data-repro-id'),kind=button.getAttribute('data-repro-kind')||'curl';
+    const entry=(DATA.network||[]).find(candidate=>candidate.id===id),snippet=entry?.reproduction;
+    if(!snippet)return;
+    const notes=snippet.context.omitted?.length?'\\n\\nNotes:\\n- '+snippet.context.omitted.join('\\n- '):'';
+    if(!window.confirm('Copy a safe, reviewable '+kind+' snippet? It will not replay automatically.'+notes))return;
+    try{await copyText(snippet[kind]);button.textContent='Copied';}catch{button.textContent='Unavailable';}
+  });
+}
 copyButton?.addEventListener('click',async()=>{
-  const citation=['Browser Listener capture','Source: '+(source||'unknown'),'Captured: '+formatDate(c.source.startedAt)+' — '+formatDate(c.source.stoppedAt),'Session: '+(s?.id||'unknown')].join('\\n');
+  const citation=DATA.bundleCitation||['Browser Listener capture','Source: '+(source||'unknown'),'Captured: '+formatDate(c.source.startedAt)+' — '+formatDate(c.source.stoppedAt),'Session: '+(s?.id||'unknown')].join('\\n');
   try{await copyText(citation);if(citationStatus)citationStatus.textContent='Copied';}catch{if(citationStatus)citationStatus.textContent='Clipboard unavailable — use export-manifest.json';}
 });
 

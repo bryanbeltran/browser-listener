@@ -1,0 +1,39 @@
+import { describe, expect, it } from "vitest";
+import { readBundle, validateBundle, filterConsole, filterNetwork, cite, summarize } from "../sdk/src/index.js";
+import { buildZipFromSessionData } from "../src/export/orchestrator.js";
+import { sampleExportSessionData } from "./fixtures/sample-session.js";
+
+describe("bundle SDK", () => {
+  it("reads, validates, filters, summarizes, and cites without executing report HTML", async () => {
+    const bundle = readBundle(await buildZipFromSessionData(sampleExportSessionData()));
+    const validation = validateBundle(bundle);
+
+    expect(validation.valid).toBe(true);
+    expect(bundle.files["report.html"]).toBeInstanceOf(Uint8Array);
+    expect(filterNetwork(bundle, { statusMin: 200 })).toHaveLength(1);
+    expect(filterConsole(bundle, { levels: ["warning"] })).toHaveLength(1);
+    expect(cite(bundle, "raw.har", "n-sample-1")).toBe(
+      "browser-listener://sample-export-session/raw.har/n-sample-1?schema=3",
+    );
+    expect(summarize(bundle)).toMatchObject({
+      sessionId: "sample-export-session",
+      network: 1,
+      console: 1,
+      navigation: 1,
+      markers: 0,
+      partial: false,
+    });
+  });
+
+  it("reports duplicate IDs and disabled-redaction warnings", async () => {
+    const data = sampleExportSessionData();
+    data.session!.options.redactionEnabled = false;
+    data.network.push({ ...data.network[0]!, id: "n-sample-1" });
+    const bundle = readBundle(await buildZipFromSessionData(data));
+    const validation = validateBundle(bundle);
+
+    expect(validation.valid).toBe(false);
+    expect(validation.issues.some((issue) => issue.code === "duplicate-id")).toBe(true);
+    expect(validation.issues.some((issue) => issue.code === "redaction-disabled" && issue.severity === "warning")).toBe(true);
+  });
+});

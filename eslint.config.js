@@ -8,7 +8,7 @@ export default tseslint.config(
     ignores: ["dist/**", "node_modules/**"],
   },
   {
-    files: ["src/**/*.ts", "tests/**/*.ts", "*.ts"],
+    files: ["src/**/*.ts", "sdk/**/*.ts", "tests/**/*.ts", "*.ts"],
     rules: {
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/no-explicit-any": "error",
@@ -18,6 +18,8 @@ export default tseslint.config(
     files: ["scripts/**/*.mjs"],
     languageOptions: {
       globals: {
+        Buffer: "readonly",
+        URL: "readonly",
         console: "readonly",
         process: "readonly",
       },

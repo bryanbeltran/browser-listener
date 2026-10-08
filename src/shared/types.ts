@@ -1,4 +1,8 @@
+export type CaptureProfile = "metadata" | "network-console" | "safe-bodies";
+
 export interface CaptureOptions {
+  /** Named, immutable capture policy selected before a session starts. */
+  profile: CaptureProfile;
   /** Capture response/request bodies when their MIME type is safe and the user opts in. */
   captureBodies: boolean;
   /** Capture browser console, runtime exception, and log events. */
@@ -10,10 +14,32 @@ export interface CaptureOptions {
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
+  profile: "network-console",
   captureBodies: false,
   captureConsole: true,
   redactionEnabled: true,
 };
+
+export function normalizeCaptureProfile(value: unknown): CaptureProfile {
+  return value === "metadata" || value === "network-console" || value === "safe-bodies"
+    ? value
+    : DEFAULT_CAPTURE_OPTIONS.profile;
+}
+
+export function inferCaptureProfile(options: Partial<CaptureOptions> | undefined): CaptureProfile {
+  if (options?.profile) return normalizeCaptureProfile(options.profile);
+  if (options?.captureBodies) return "safe-bodies";
+  if (options?.captureConsole === false) return "metadata";
+  return DEFAULT_CAPTURE_OPTIONS.profile;
+}
+
+export function captureProfileDefaults(profile: CaptureProfile): Pick<CaptureOptions, "captureBodies" | "captureConsole"> {
+  return profile === "metadata"
+    ? { captureBodies: false, captureConsole: false }
+    : profile === "safe-bodies"
+      ? { captureBodies: true, captureConsole: true }
+      : { captureBodies: false, captureConsole: true };
+}
 
 export interface NavigationEntry {
   id: string;
@@ -211,6 +237,7 @@ export interface CoverageReport {
     pauseIntervals: PauseInterval[];
   };
   policy: {
+    profile: CaptureProfile;
     redactionEnabled: boolean;
     captureBodies: boolean;
     captureConsole: boolean;
@@ -329,4 +356,34 @@ export interface RedactionConfig {
   urlParamKeys: string[];
   objectSensitiveKeys?: string[];
   customRules: RedactionRule[];
+}
+
+export type CitationArtifact = "report.html" | "raw.har" | "raw-console.json";
+
+/** Stable, secret-free address for one exported evidence record. */
+export interface EvidenceCitation {
+  schemaVersion: 1;
+  bundleId: string;
+  artifact: CitationArtifact;
+  eventId: string;
+  address: string;
+}
+
+export interface ReproductionContext {
+  method: string;
+  url: string;
+  statusCode?: number;
+  startedAt: number;
+  durationMs?: number;
+  bodyIncluded: boolean;
+  omitted: string[];
+}
+
+/** Derived, reviewable request snippets; never a replay instruction. */
+export interface ReproductionSnippets {
+  citation: EvidenceCitation;
+  curl: string;
+  fetch: string;
+  httpie: string;
+  context: ReproductionContext;
 }

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/report-metadata.v1.schema.json",
+  "title": "Browser Listener report metadata v1",
+  "type": "object",
+  "required": ["bundleCitation", "coverage", "privacy", "navigation", "console", "network", "markers"],
+  "properties": {
+    "bundleCitation": { "type": "string", "pattern": "^browser-listener://" },
+    "coverage": { "type": "object", "required": ["schemaVersion"] },
+    "privacy": { "type": "object", "required": ["redactionEnabled", "audit"] },
+    "navigation": { "type": "array" },
+    "console": { "type": "array" },
+    "network": { "type": "array" },
+    "markers": { "type": "array" }
+  }
+}
