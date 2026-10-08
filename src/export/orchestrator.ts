@@ -7,6 +7,9 @@ import { baseManifestFiles, buildExportManifest } from "./manifest-builder.js";
 import { buildSessionSummary } from "./summary.js";
 import { buildZip, zipFileMapFromExport } from "./zip-builder.js";
 import type { SessionData } from "../shared/types.js";
+import { sha256Hex } from "./checksum.js";
+import { strToU8 } from "fflate";
+import { REDACTION_RULE_SET_VERSION } from "../redaction/engine.js";
 
 /** Redact export data again at the boundary. */
 export async function processSessionForExport(data: SessionData): Promise<SessionData> {
@@ -40,13 +43,39 @@ export async function buildZipFromSessionData(
 
 async function buildZipBundle(data: SessionData, exportedAt: number): Promise<Uint8Array> {
   const coverageReport = buildCoverageReport(data, exportedAt);
-  const files = baseManifestFiles();
-  const bundle = {
-    reportHtml: generateReportHtml(data, coverageReport),
-    rawHar: JSON.stringify(buildHar(data), null, 2),
-    rawConsole: JSON.stringify(data.console, null, 2),
-    manifest: JSON.stringify(buildExportManifest(data, files, coverageReport, exportedAt), null, 2),
+  const reportHtml = generateReportHtml(data, coverageReport);
+  const rawHar = JSON.stringify(buildHar(data), null, 2);
+  const rawConsole = JSON.stringify(data.console, null, 2);
+  const artifactBytes: Record<string, Uint8Array> = {
+    "report.html": strToU8(reportHtml),
+    "raw.har": strToU8(rawHar),
+    "raw-console.json": strToU8(rawConsole),
   };
+  const files = baseManifestFiles().map((file) => {
+    const bytes = artifactBytes[file.path];
+    return bytes
+      ? { ...file, bytes: bytes.byteLength, sha256: undefined }
+      : file;
+  });
+  for (const file of files) {
+    const bytes = artifactBytes[file.path];
+    if (bytes) file.sha256 = await sha256Hex(bytes);
+  }
+  const provenance = {
+    schemaVersion: 1 as const,
+    deterministic: true as const,
+    checksumAlgorithm: "sha256" as const,
+    sourceSessionId: data.session?.id ?? "none",
+    exportedAt,
+    redactionRuleSetVersion: REDACTION_RULE_SET_VERSION,
+    manifestChecksumExcluded: true as const,
+  };
+  const manifest = JSON.stringify(
+    buildExportManifest(data, files, coverageReport, exportedAt, provenance),
+    null,
+    2,
+  );
+  const bundle = { reportHtml, rawHar, rawConsole, manifest };
   return buildZip(zipFileMapFromExport(bundle), exportedAt);
 }
 

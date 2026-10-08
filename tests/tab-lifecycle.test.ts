@@ -55,4 +55,24 @@ describe("tab lifecycle", () => {
     const data = await readSessionData();
     expect(data.session?.active).toBe(true);
   });
+
+  it("marks a secondary selected tab closed without stopping primary capture", async () => {
+    const session = sampleSession({
+      active: true,
+      tabId: 42,
+      targets: [
+        { tabId: 42, url: "https://example.test/primary", partialGaps: [] },
+        { tabId: 43, url: "https://example.test/secondary", partialGaps: [] },
+      ],
+    });
+    await writeSessionData({ ...emptySessionData(), session });
+
+    const { handleTabClosed } = await import("../src/background/tab-lifecycle.js");
+    await handleTabClosed(43);
+
+    const data = await readSessionData();
+    expect(data.session?.active).toBe(true);
+    expect(data.session?.targets?.find((target) => target.tabId === 43)?.tabClosed).toBe(true);
+    expect(data.session?.health.partialGaps.some((gap) => gap.reason === "target_tab_closed:43")).toBe(true);
+  });
 });

@@ -72,6 +72,47 @@ h1 {
   font-size: 0.85rem;
 }
 
+.target-tabs {
+  margin: 12px 0;
+  padding: 8px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+}
+
+.target-tabs legend {
+  padding: 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.target-tabs .hint {
+  margin: 4px 0 8px;
+}
+
+.target-tabs-list {
+  display: grid;
+  gap: 6px;
+}
+
+.target-tab-option {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 0.8rem;
+  line-height: 1.25;
+}
+
+.target-tab-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.target-tab-url {
+  display: block;
+  opacity: 0.65;
+  font-size: 0.7rem;
+}
+
 .field-label {
   display: block;
   margin-top: 12px;
@@ -123,6 +164,13 @@ h1 {
 .redaction-actions {
   display: flex;
   gap: 6px;
+}
+
+.preview-output {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
 }
 
 .redaction-actions button {

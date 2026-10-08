@@ -6,7 +6,7 @@ import {
 import type { RedactionConfig, RedactionRule } from "../shared/types.js";
 
 export const REDACTED = "[REDACTED]";
-export const REDACTION_RULE_SET_VERSION = "default-v1" as const;
+export const REDACTION_RULE_SET_VERSION = "default-v2" as const;
 
 const DEFAULT_CONFIG: RedactionConfig = {
   sensitiveKeys: [...DEFAULT_SENSITIVE_KEYS],
@@ -115,9 +115,9 @@ export function redactUrl(url: string): string {
         u.searchParams.set(key, REDACTED);
       }
     });
-    return redactString(u.toString());
+    return redactSensitiveString(u.toString());
   } catch {
-    return redactString(url);
+    return redactSensitiveString(url);
   }
 }
 
@@ -133,8 +133,7 @@ export function redactHeaders(
 }
 
 function looksSensitiveValue(value: string): boolean {
-  const lower = value.toLowerCase();
-  if (DEFAULT_SENSITIVE_KEYS.some((k) => lower.includes(k))) return true;
+  if (/(?:authorization|cookie|set-cookie|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|password|secret|session|jwt|bearer)\b\s*(?:is\s*)?(?:[:=]|\s)\s*[a-z0-9][a-z0-9._~+/=-]{2,}/i.test(value)) return true;
   if (/bearer\s+[a-z0-9._-]+/i.test(value)) return true;
   if (/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/.test(value)) return true;
   return HIGH_CONFIDENCE_SECRET_PATTERNS.some((pattern) => pattern.test(value));
@@ -174,12 +173,12 @@ export function redactHtmlSummary(html: string): string {
     (m) => m.replace(/(value|placeholder)=["'][^"']*["']/i, '$1="' + REDACTED + '"'),
   );
   out = out.replace(/type=["']password["']/gi, 'type="password" data-redacted="true"');
-  return redactString(out.slice(0, 50_000));
+  return redactSensitiveString(out.slice(0, 50_000));
 }
 
 export function redactDeep<T>(value: T): T {
   if (value == null) return value;
-  if (typeof value === "string") return redactString(value) as T;
+  if (typeof value === "string") return redactSensitiveString(value) as T;
   if (Array.isArray(value)) return value.map((v) => redactDeep(v)) as T;
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;

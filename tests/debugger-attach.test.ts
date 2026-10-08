@@ -33,8 +33,9 @@ function installChromeWithDebugger(): DebuggerMocks {
 describe("attachDebugger", () => {
   afterEach(async () => {
     try {
-      const { flushPopupSnapshot } = await import("../src/persistence/store.js");
-      await flushPopupSnapshot();
+      const store = await import("../src/persistence/store.js");
+      await store.flushPopupSnapshot();
+      await store.resetNetworkStoreForTests();
     } catch {
       /* store not loaded */
     }
@@ -94,5 +95,38 @@ describe("attachDebugger", () => {
     const data = await readSessionData();
     expect(data.session?.health.debuggerAttached).toBe(true);
     expect(data.session?.health.debuggerEverAttached).toBe(true);
+  });
+
+  it("attaches every selected target while keeping a secondary gap non-fatal", async () => {
+    const { attach, sendCommand } = installChromeWithDebugger();
+    const session = sampleSession({
+      active: true,
+      tabId: 42,
+      targets: [
+        { tabId: 42, url: "https://example.test/primary", partialGaps: [] },
+        { tabId: 43, url: "https://example.test/secondary", partialGaps: [] },
+      ],
+    });
+    await writeSessionData({ ...emptySessionData(), session });
+
+    attach.mockImplementation(async ({ tabId }: { tabId: number }) => {
+      if (tabId === 43) throw new Error("secondary unavailable");
+    });
+
+    const mod = await import("../src/capture/debugger-capture.js");
+    await mod.ensureDebuggerForSession();
+
+    expect(attach).toHaveBeenCalledWith({ tabId: 42 }, "1.3");
+    expect(attach).toHaveBeenCalledWith({ tabId: 43 }, "1.3");
+    expect(mod.getAttachedTabIds()).toEqual([42]);
+    expect(sendCommand).toHaveBeenCalled();
+
+    const data = await readSessionData();
+    expect(data.session?.health.debuggerAttached).toBe(true);
+    expect(data.session?.targets?.find((target) => target.tabId === 42)?.debuggerAttached).toBe(true);
+    expect(data.session?.targets?.find((target) => target.tabId === 43)?.debuggerAttached).toBe(false);
+    expect(data.session?.targets?.find((target) => target.tabId === 43)?.partialGaps).toEqual(
+      expect.arrayContaining([expect.objectContaining({ reason: "debugger_attach_failed" })]),
+    );
   });
 });

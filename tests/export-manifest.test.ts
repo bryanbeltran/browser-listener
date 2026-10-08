@@ -25,7 +25,7 @@ describe("export manifest", () => {
     expect(manifest.format).toBe("browser-listener");
     expect(manifest.coverage.schemaVersion).toBe(3);
     expect(manifest.privacy.schemaVersion).toBe(1);
-    expect(manifest.privacy.redactionRuleSetVersion).toBe("default-v1");
+    expect(manifest.privacy.redactionRuleSetVersion).toBe("default-v2");
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
     expect(manifest.coverage.policy.redactionEnabled).toBe(true);
     expect(manifest.coverage.policy.profile).toBe("network-console");

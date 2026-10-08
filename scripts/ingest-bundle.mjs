@@ -15,7 +15,7 @@ try {
   throw new Error(`Bundle SDK is not built; run npm run build:sdk first (${error instanceof Error ? error.message : String(error)})`);
 }
 
-export const INGEST_SCHEMA_VERSION = 1;
+export const INGEST_SCHEMA_VERSION = 2;
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -87,8 +87,12 @@ function ensureSchema(db) {
       PRIMARY KEY (bundle_id, event_id),
       FOREIGN KEY (bundle_id) REFERENCES bundles(bundle_id) ON DELETE CASCADE
     );
+    CREATE INDEX IF NOT EXISTS network_events_url_idx ON network_events (url);
+    CREATE INDEX IF NOT EXISTS network_events_status_idx ON network_events (status);
+    CREATE INDEX IF NOT EXISTS console_events_level_idx ON console_events (level);
+    CREATE INDEX IF NOT EXISTS navigation_events_url_idx ON navigation_events (url);
   `);
-  if (version === 0) db.exec(`PRAGMA user_version = ${INGEST_SCHEMA_VERSION}`);
+  if (version < INGEST_SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${INGEST_SCHEMA_VERSION}`);
 }
 
 function rowValue(row, key) {
@@ -110,12 +114,13 @@ export function listImportedBundles(dbPath) {
   }
 }
 
-export function ingestBundle({ archivePath, dbPath }) {
+export async function ingestBundle({ archivePath, dbPath }) {
   const archiveBytes = readFileSync(resolve(archivePath));
   const sourceSha256 = sha256(archiveBytes);
   const bundle = sdk.readBundle(archiveBytes);
   const validation = sdk.validateBundle(bundle);
-  const errors = validation.issues.filter((issue) => issue.severity === "error");
+  const checksumValidation = await sdk.verifyChecksums(bundle);
+  const errors = [...validation.issues, ...checksumValidation.issues].filter((issue) => issue.severity === "error");
   if (errors.length) {
     throw new Error(`Bundle validation failed: ${errors.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`);
   }
@@ -212,6 +217,234 @@ export function ingestBundle({ archivePath, dbPath }) {
   }
 }
 
+const QUERY_DEFINITIONS = {
+  bundles: {
+    table: "bundles",
+    timeColumn: "imported_at",
+    fields: {
+      bundleId: "bundle_id AS bundleId",
+      sourceSha256: "source_sha256 AS sourceSha256",
+      sourcePath: "source_path AS sourcePath",
+      importedAt: "imported_at AS importedAt",
+      exportedAt: "exported_at AS exportedAt",
+      manifestSchemaVersion: "manifest_schema_version AS manifestSchemaVersion",
+      coverageSchemaVersion: "coverage_schema_version AS coverageSchemaVersion",
+      redactionEnabled: "redaction_enabled AS redactionEnabled",
+      partial: "partial",
+    },
+    defaults: ["bundleId", "sourceSha256", "importedAt", "exportedAt", "coverageSchemaVersion", "redactionEnabled", "partial"],
+  },
+  network: {
+    table: "network_events",
+    timeColumn: "started_at",
+    urlColumn: "url",
+    statusColumn: "status",
+    methodColumn: "method",
+    typeColumn: "type",
+    fields: {
+      bundleId: "bundle_id AS bundleId",
+      eventId: "event_id AS eventId",
+      requestId: "request_id AS requestId",
+      sequence: "sequence",
+      startedAt: "started_at AS startedAt",
+      url: "url",
+      method: "method",
+      type: "type",
+      status: "status",
+      durationMs: "duration_ms AS durationMs",
+      bodyCaptured: "body_captured AS bodyCaptured",
+      schemaVersion: "(SELECT coverage_schema_version FROM bundles WHERE bundles.bundle_id = network_events.bundle_id) AS schemaVersion",
+    },
+    defaults: ["bundleId", "eventId", "sequence", "startedAt", "url", "method", "type", "status", "durationMs", "bodyCaptured"],
+    citationArtifact: "raw.har",
+  },
+  console: {
+    table: "console_events",
+    timeColumn: "timestamp",
+    textColumn: "text",
+    levelColumn: "level",
+    fields: {
+      bundleId: "bundle_id AS bundleId",
+      eventId: "event_id AS eventId",
+      sequence: "sequence",
+      timestamp: "timestamp",
+      level: "level",
+      text: "text",
+      schemaVersion: "(SELECT coverage_schema_version FROM bundles WHERE bundles.bundle_id = console_events.bundle_id) AS schemaVersion",
+    },
+    defaults: ["bundleId", "eventId", "sequence", "timestamp", "level", "text"],
+    citationArtifact: "raw-console.json",
+  },
+  navigation: {
+    table: "navigation_events",
+    timeColumn: "timestamp",
+    urlColumn: "url",
+    fields: {
+      bundleId: "bundle_id AS bundleId",
+      eventId: "event_id AS eventId",
+      sequence: "sequence",
+      timestamp: "timestamp",
+      url: "url",
+      title: "title",
+      schemaVersion: "(SELECT coverage_schema_version FROM bundles WHERE bundles.bundle_id = navigation_events.bundle_id) AS schemaVersion",
+    },
+    defaults: ["bundleId", "eventId", "sequence", "timestamp", "url", "title"],
+    citationArtifact: "raw.har",
+  },
+};
+
+function parseQuery(query) {
+  if (typeof query === "string") {
+    try {
+      return JSON.parse(query);
+    } catch (error) {
+      throw new Error(`Invalid query JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return query ?? {};
+}
+
+function asBoundedInteger(value, fallback, maximum) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, maximum);
+}
+
+function queryTimeValue(value, numeric) {
+  if (numeric) {
+    const parsed = typeof value === "number" ? value : Date.parse(String(value));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === "number") return new Date(value).toISOString();
+  return typeof value === "string" && value ? value : null;
+}
+
+function addInFilter(clauses, params, column, values) {
+  if (!column) return;
+  const list = Array.isArray(values) ? values.filter((value) => typeof value === "string" && value) : [];
+  if (!list.length) return;
+  clauses.push(`${column} IN (${list.map(() => "?").join(", ")})`);
+  params.push(...list);
+}
+
+function queryRows({ dbPath, query }) {
+  const request = parseQuery(query);
+  if (!request || typeof request !== "object" || Array.isArray(request)) throw new Error("Query must be a JSON object");
+  const entity = request.entity ?? request.kind ?? "network";
+  const definition = QUERY_DEFINITIONS[entity];
+  if (!definition) throw new Error(`Unsupported query entity: ${entity}`);
+  const filters = request.filters && typeof request.filters === "object" ? request.filters : {};
+  const selected = Array.isArray(request.select) ? request.select : definition.defaults;
+  const fields = [...new Set(["bundleId", ...(definition.citationArtifact ? ["schemaVersion"] : []), ...(selected.filter((field) => definition.fields[field]))])];
+  const projection = fields.map((field) => definition.fields[field]).join(", ");
+  const clauses = [];
+  const params = [];
+  const bundleId = filters.bundleId ?? filters.sessionId;
+  if (typeof bundleId === "string" && bundleId) {
+    clauses.push("bundle_id = ?");
+    params.push(bundleId);
+  }
+  if (filters.redactionEnabled != null && entity === "bundles") {
+    clauses.push("redaction_enabled = ?");
+    params.push(filters.redactionEnabled === true ? 1 : 0);
+  }
+  if (definition.urlColumn && typeof filters.urlIncludes === "string" && filters.urlIncludes) {
+    clauses.push(`${definition.urlColumn} LIKE ?`);
+    params.push(`%${filters.urlIncludes}%`);
+  }
+  if (definition.textColumn && typeof filters.textIncludes === "string" && filters.textIncludes) {
+    clauses.push(`${definition.textColumn} LIKE ?`);
+    params.push(`%${filters.textIncludes}%`);
+  }
+  if (definition.levelColumn && typeof filters.level === "string" && filters.level) {
+    clauses.push(`${definition.levelColumn} = ?`);
+    params.push(filters.level);
+  }
+  addInFilter(clauses, params, definition.levelColumn, filters.levels);
+  addInFilter(clauses, params, definition.methodColumn, filters.methods);
+  addInFilter(clauses, params, definition.typeColumn, filters.types);
+  if (definition.statusColumn && filters.statusMin != null) {
+    clauses.push(`${definition.statusColumn} >= ?`);
+    params.push(Number(filters.statusMin));
+  }
+  if (definition.statusColumn && filters.statusMax != null) {
+    clauses.push(`${definition.statusColumn} <= ?`);
+    params.push(Number(filters.statusMax));
+  }
+  const numericTime = entity === "console" || entity === "navigation" || entity === "bundles";
+  const from = queryTimeValue(filters.from, numericTime);
+  const to = queryTimeValue(filters.to, numericTime);
+  if (from != null) {
+    clauses.push(`${definition.timeColumn} >= ?`);
+    params.push(from);
+  }
+  if (to != null) {
+    clauses.push(`${definition.timeColumn} <= ?`);
+    params.push(to);
+  }
+  const limit = asBoundedInteger(request.limit, 100, 1_000);
+  const maxBytes = asBoundedInteger(request.maxBytes, 1_000_000, 10_000_000);
+  const sql = `SELECT ${projection} FROM ${definition.table}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY ${definition.timeColumn}, bundle_id, rowid LIMIT ?`;
+  const db = new DatabaseSync(resolve(dbPath));
+  try {
+    ensureSchema(db);
+    const rawRows = db.prepare(sql).all(...params, limit + 1);
+    const rows = rawRows.slice(0, limit).map((row) => {
+      const result = { ...row };
+      if (definition.citationArtifact && result.eventId) {
+        const schemaVersion = result.schemaVersion ?? 0;
+        result.citation = `browser-listener://${encodeURIComponent(result.bundleId)}/${encodeURIComponent(definition.citationArtifact)}/${encodeURIComponent(result.eventId)}?schema=${schemaVersion}`;
+        delete result.schemaVersion;
+      }
+      return result;
+    });
+    let truncated = rawRows.length > limit;
+    while (rows.length && JSON.stringify(rows).length > maxBytes) {
+      rows.pop();
+      truncated = true;
+    }
+    return { entity, rows, truncated, bytes: JSON.stringify(rows).length };
+  } finally {
+    db.close();
+  }
+}
+
+export function queryIngested({ dbPath, query }) {
+  return queryRows({ dbPath, query });
+}
+
+export function deleteBundle({ dbPath, bundleId }) {
+  if (typeof bundleId !== "string" || !bundleId) throw new Error("A bundle ID is required");
+  const db = new DatabaseSync(resolve(dbPath));
+  try {
+    ensureSchema(db);
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = db.prepare("SELECT bundle_id AS bundleId FROM bundles WHERE bundle_id = ?").get(bundleId);
+      if (!existing) {
+        db.exec("ROLLBACK");
+        return { status: "not-found", bundleId };
+      }
+      db.prepare("DELETE FROM bundles WHERE bundle_id = ?").run(bundleId);
+      db.exec("COMMIT");
+      return { status: "deleted", bundleId };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+export async function ingestBundles({ archivePaths, dbPath }) {
+  const results = [];
+  for (const archivePath of archivePaths) {
+    results.push(await ingestBundle({ archivePath, dbPath }));
+  }
+  return results;
+}
+
 function argValue(args, flag) {
   const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : undefined;
@@ -219,19 +452,36 @@ function argValue(args, flag) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
-  const archivePath = args.find((arg) => !arg.startsWith("--"));
   const dbPath = argValue(args, "--db");
   const json = args.includes("--json");
   const list = args.includes("--list");
-  if (!dbPath || (!archivePath && !list)) {
-    console.error("Usage: npm run ingest -- <bundle.zip> --db <sessions.db> [--json]");
+  const query = argValue(args, "--query");
+  const deleteId = argValue(args, "--delete");
+  const valueFlags = new Set(["--db", "--query", "--delete"]);
+  const archivePaths = args.filter((arg, index) => {
+    if (arg.startsWith("--")) return false;
+    const previous = args[index - 1];
+    return !valueFlags.has(previous);
+  });
+  if (!dbPath || (!archivePaths.length && !list && !query && !deleteId)) {
+    console.error("Usage: npm run ingest -- <bundle.zip> [<bundle2.zip> ...] --db <sessions.db> [--json]");
     console.error("       npm run ingest -- --list --db <sessions.db> [--json]");
+    console.error("       npm run ingest -- --query '<json>' --db <sessions.db> [--json]");
+    console.error("       npm run ingest -- --delete <bundle-id> --db <sessions.db> [--json]");
     process.exitCode = 2;
   } else {
     try {
-      const result = list ? listImportedBundles(resolve(dbPath)) : ingestBundle({ archivePath, dbPath });
+      const result = list
+        ? listImportedBundles(resolve(dbPath))
+        : query
+          ? queryIngested({ dbPath, query })
+          : deleteId
+            ? deleteBundle({ dbPath, bundleId: deleteId })
+            : await ingestBundles({ archivePaths, dbPath });
       if (json) console.log(JSON.stringify(result, null, 2));
       else if (list) for (const row of result) console.log(`${row.bundleId}\t${row.sourceSha256}\t${row.partial ? "partial" : "complete"}`);
+      else if (query) for (const row of result.rows) console.log(JSON.stringify(row));
+      else if (Array.isArray(result)) for (const row of result) console.log(`${row.status}: ${row.bundleId}`);
       else console.log(`${result.status}: ${result.bundleId}`);
     } catch (error) {
       console.error(`Could not ingest bundle: ${error instanceof Error ? error.message : String(error)}`);

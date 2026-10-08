@@ -90,6 +90,8 @@ describe("coverage report", () => {
       markers: 1,
       requestBodies: 0,
       responseBodies: 1,
+      contextSnapshots: 0,
+      performanceSignals: 0,
     });
     expect(report.fields.network.responseBody).toMatchObject({ present: 1, total: 2, percent: 50 });
     expect(report.fields.navigation.title).toMatchObject({ present: 1, total: 1, percent: 100 });
@@ -104,6 +106,8 @@ describe("coverage report", () => {
       healthGaps: 1,
       persistenceErrors: 1,
       markersTruncated: 0,
+      contextSnapshotsTruncated: 0,
+      performanceSignalsTruncated: 0,
       filteredNetworkRequests: 0,
       partial: true,
       gapReasons: ["debugger_detach: canceled"],

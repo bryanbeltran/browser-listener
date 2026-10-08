@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendConsole,
+  appendContextSnapshot,
   appendMarker,
   appendNavigation,
+  appendPerformanceSignal,
   emptySessionData,
   readSessionData,
   writeSessionData,
@@ -65,5 +67,36 @@ describe("bounded session evidence", () => {
     expect(data.markers).toHaveLength(1);
     expect(data.markers?.[0]?.note).toBe("[REDACTED]");
     expect(data.markers?.[0]?.url).not.toContain("secret");
+  });
+
+  it("persists low-volume context and performance signals under their own caps", async () => {
+    const session = sampleSession({ active: true });
+    await appendContextSnapshot({
+      id: "context-1",
+      sessionId: session.id,
+      timestamp: 4,
+      tabId: session.tabId,
+      url: "https://example.test/problem?token=secret",
+      title: "Problem",
+      visibilityState: "visible",
+      focused: true,
+      online: true,
+      viewport: { width: 1280, height: 720 },
+      deviceScaleFactor: 2,
+      source: "tabs.get",
+    });
+    await appendPerformanceSignal({
+      id: "performance-1",
+      sessionId: session.id,
+      timestamp: 5,
+      tabId: session.tabId,
+      browserSupport: "cdp-performance-v1",
+      metrics: { LoadEvent: 1.25 },
+    });
+
+    const data = await readSessionData();
+    expect(data.contextSnapshots).toHaveLength(1);
+    expect(data.contextSnapshots?.[0]?.url).not.toContain("secret");
+    expect(data.performanceSignals?.[0]?.metrics).toEqual({ LoadEvent: 1.25 });
   });
 });

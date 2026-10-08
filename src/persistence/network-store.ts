@@ -2,7 +2,7 @@ import { NETWORK_STORE_LIMITS, estimateNetworkEntryBytes } from "./limits.js";
 import type { NetworkEntry } from "../shared/types.js";
 
 const DB_NAME = "browser-listener";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "network_entries";
 
 export interface UpsertNetworkResult {
@@ -61,12 +61,27 @@ function openNetworkDb(): Promise<IDBDatabase> {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
       const req = idb().open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
+      req.onupgradeneeded = (event) => {
         const db = req.result;
+        const transaction = req.transaction;
+        if (!transaction) throw new Error("Network store upgrade transaction unavailable");
         if (!db.objectStoreNames.contains(STORE)) {
-          const store = db.createObjectStore(STORE, { keyPath: "requestId" });
+          const store = db.createObjectStore(STORE, { keyPath: "id" });
           store.createIndex("sessionId", "sessionId", { unique: false });
           store.createIndex("sessionTimestamp", ["sessionId", "timestamp"], { unique: false });
+          return;
+        }
+        if ((event as IDBVersionChangeEvent).oldVersion < 2) {
+          const oldStore = transaction.objectStore(STORE);
+          const getAll = oldStore.getAll();
+          getAll.onsuccess = () => {
+            const entries = getAll.result as NetworkEntry[];
+            db.deleteObjectStore(STORE);
+            const store = db.createObjectStore(STORE, { keyPath: "id" });
+            store.createIndex("sessionId", "sessionId", { unique: false });
+            store.createIndex("sessionTimestamp", ["sessionId", "timestamp"], { unique: false });
+            for (const entry of entries) store.put(entry);
+          };
         }
       };
       req.onsuccess = () => {
@@ -175,7 +190,7 @@ export async function putNetworkEntries(
   const writes: { entry: NetworkEntry; previous: NetworkEntry | null; isNew: boolean }[] = [];
   await withStore("readwrite", async (store) => {
     for (const entry of entries) {
-      const existing = (await requestToPromise(store.get(entry.requestId))) as NetworkEntry | undefined;
+      const existing = (await requestToPromise(store.get(entry.id))) as NetworkEntry | undefined;
       const entryIsNew = !existing;
       if (entryIsNew) isNew = true;
       else if (!previous) previous = existing;
@@ -198,7 +213,7 @@ export async function upsertNetworkEntry(
   let previous: NetworkEntry | null = null;
   let isNew = false;
   await withStore("readwrite", async (store) => {
-    previous = ((await requestToPromise(store.get(entry.requestId))) as NetworkEntry | undefined) ?? null;
+    previous = ((await requestToPromise(store.get(entry.id))) as NetworkEntry | undefined) ?? null;
     isNew = !previous;
     await requestToPromise(store.put({ ...entry, sessionId }));
   });
@@ -214,7 +229,7 @@ export async function clearNetworkEntries(sessionId: string): Promise<void> {
   if (!entries.length) return;
   await withStore("readwrite", async (store) => {
     for (const entry of entries) {
-      await requestToPromise(store.delete(entry.requestId));
+      await requestToPromise(store.delete(entry.id));
     }
   });
 }

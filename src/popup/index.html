@@ -29,6 +29,13 @@
         <input type="checkbox" id="consent-checkbox" />
         <span>I have permission to capture this page and its visible activity.</span>
       </label>
+      <fieldset id="target-tabs" class="target-tabs">
+        <legend>Capture tabs</legend>
+        <p class="hint">The current tab is required. Select other HTTP(S) tabs only when you have permission to capture them.</p>
+        <div id="target-tabs-list" class="target-tabs-list" aria-live="polite">
+          <p class="hint">Loading tabs…</p>
+        </div>
+      </fieldset>
       <label for="capture-profile" class="field-label">Capture profile</label>
       <select id="capture-profile" class="text-input">
         <option value="metadata">Metadata only — no console or bodies</option>
@@ -60,8 +67,10 @@
         <div class="redaction-actions">
           <button type="button" id="btn-save-redaction-config" class="secondary">Save rules</button>
           <button type="button" id="btn-reset-redaction-config" class="secondary">Reset defaults</button>
+          <button type="button" id="btn-preview-redaction" class="secondary">Preview synthetic redaction</button>
         </div>
         <p id="redaction-config-status" class="hint" aria-live="polite"></p>
+        <pre id="redaction-preview" class="preview-output hidden" aria-live="polite"></pre>
       </details>
       <button type="button" id="btn-start" class="primary" disabled>Start capture</button>
       <p id="start-error" class="hint error hidden" role="alert"></p>

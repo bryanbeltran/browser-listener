@@ -7,7 +7,12 @@
   "properties": {
     "schemaVersion": { "const": 3 },
     "generatedAt": { "type": "integer", "minimum": 0 },
-    "source": { "type": "object" },
+    "source": {
+      "type": "object",
+      "properties": {
+        "targets": { "type": "array", "items": { "type": "object" } }
+      }
+    },
     "capture": {
       "type": "object",
       "required": ["paused", "pauseIntervals"],
@@ -27,14 +32,16 @@
         "allowedOrigins": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "totals": { "type": "object", "required": ["network", "navigation", "console", "markers", "requestBodies", "responseBodies"] },
+    "totals": { "type": "object", "required": ["network", "navigation", "console", "markers", "requestBodies", "responseBodies", "contextSnapshots", "performanceSignals"] },
     "fields": { "type": "object" },
     "quality": {
       "type": "object",
       "required": ["partial", "gapReasons"],
       "properties": {
         "partial": { "type": "boolean" },
-        "gapReasons": { "type": "array", "items": { "type": "string" } }
+        "gapReasons": { "type": "array", "items": { "type": "string" } },
+        "contextSnapshotsTruncated": { "type": "integer", "minimum": 0 },
+        "performanceSignalsTruncated": { "type": "integer", "minimum": 0 }
       }
     }
   }

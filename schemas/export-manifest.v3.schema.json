@@ -14,6 +14,7 @@
     "privacy": { "$ref": "#/$defs/privacy" },
     "options": { "$ref": "#/$defs/options" },
     "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+    "provenance": { "$ref": "#/$defs/provenance" },
     "coverage": { "$ref": "coverage.v3.schema.json" },
     "health": { "type": "object" }
   },
@@ -28,7 +29,7 @@
         "audit": { "type": "object" },
         "captureBodies": { "type": "boolean" },
         "captureConsole": { "type": "boolean" },
-        "scope": { "const": "active-tab" },
+        "scope": { "enum": ["active-tab", "selected-tabs"] },
         "localOnly": { "const": true },
         "remoteUpload": { "const": false }
       }
@@ -41,7 +42,8 @@
         "captureBodies": { "type": "boolean" },
         "captureConsole": { "type": "boolean" },
         "redactionEnabled": { "type": "boolean" },
-        "allowedOrigins": { "type": "array", "items": { "type": "string", "format": "uri" } }
+        "allowedOrigins": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        "targetTabIds": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
       }
     },
     "file": {
@@ -53,7 +55,21 @@
         "optional": { "type": "boolean" },
         "enabled": { "type": "boolean" },
         "schemaVersion": { "type": "integer", "minimum": 1 },
-        "bytes": { "type": "integer", "minimum": 0 }
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["schemaVersion", "deterministic", "checksumAlgorithm", "sourceSessionId", "exportedAt", "redactionRuleSetVersion", "manifestChecksumExcluded"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "deterministic": { "const": true },
+        "checksumAlgorithm": { "const": "sha256" },
+        "sourceSessionId": { "type": "string" },
+        "exportedAt": { "type": "integer", "minimum": 0 },
+        "redactionRuleSetVersion": { "type": "string" },
+        "manifestChecksumExcluded": { "const": true }
       }
     }
   }

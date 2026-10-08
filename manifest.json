@@ -8,6 +8,7 @@
     "unlimitedStorage",
     "downloads",
     "activeTab",
+    "tabs",
     "debugger"
   ],
   "background": {

@@ -10,6 +10,7 @@ import {
 } from "../capture/session-manager.js";
 import {
   attachDebugger,
+  detachDebugger,
   ensureDebuggerForSession,
   isDebuggerAttachedToTab,
   registerDebuggerCapture,
@@ -26,6 +27,7 @@ import {
 import {
   readRedactionConfig,
   readRedactionPreference,
+  loadRedactionConfig,
   resetRedactionConfigPreference,
   setRedactionConfigPreference,
   setRedactionPreference,
@@ -33,26 +35,83 @@ import {
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
-import type { CaptureOptions, MarkerEntry } from "../shared/types.js";
+import type { CaptureOptions, CaptureTarget, MarkerEntry } from "../shared/types.js";
 import { isCaptureableUrl } from "../shared/urls.js";
+import { buildRedactionPreview } from "../redaction/preview.js";
+import { captureBrowserContext, capturePerformanceSignal } from "../capture/context.js";
+
+function nearestEventId(
+  entries: Array<{ id: string; timestamp: number; tabId?: number }>,
+  tabId: number,
+  timestamp: number,
+): string | undefined {
+  return [...entries]
+    .filter((entry) => entry.tabId == null || entry.tabId === tabId)
+    .sort((left, right) =>
+      Math.abs(left.timestamp - timestamp) - Math.abs(right.timestamp - timestamp) ||
+      left.id.localeCompare(right.id),
+    )[0]?.id;
+}
 
 async function startWithConsent(
   tabId: number,
   options: Partial<CaptureOptions> = {},
 ): Promise<void> {
-  const tab = await chrome.tabs.get(tabId);
-  if (!isCaptureableUrl(tab.url)) {
+  const requestedIds = options.targetTabIds ?? [tabId];
+  if (!Array.isArray(requestedIds) || requestedIds.some((id) => !Number.isInteger(id) || id < 0)) {
+    throw new Error("Selected capture tabs are invalid");
+  }
+  const selectedIds = [...new Set([tabId, ...requestedIds])];
+  const selectedTabs = await Promise.all(
+    selectedIds.map(async (selectedId) => {
+      try {
+        return await chrome.tabs.get(selectedId);
+      } catch {
+        throw new Error(`Selected tab ${selectedId} is unavailable`);
+      }
+    }),
+  );
+  for (const selectedTab of selectedTabs) {
+    if (!isCaptureableUrl(selectedTab.url)) {
+      throw new Error(`Selected tab ${selectedTab.id ?? "?"} is not a regular HTTP(S) page`);
+    }
+  }
+  const primaryTab = selectedTabs.find((selectedTab) => selectedTab.id === tabId);
+  if (!primaryTab || !isCaptureableUrl(primaryTab.url)) {
     throw new Error("Open a regular web page before starting capture");
   }
-  await createSession(tabId, tab.url, options);
+  const targets: CaptureTarget[] = selectedTabs.map((selectedTab) => ({
+    tabId: selectedTab.id as number,
+    url: selectedTab.url,
+    title: selectedTab.title,
+    partialGaps: [],
+  }));
+  const sessionOptions: Partial<CaptureOptions> = {
+    ...options,
+    targetTabIds: selectedIds,
+  };
+  await createSession(tabId, primaryTab.url, sessionOptions, targets);
   try {
     await attachDebugger(tabId);
     if (!isDebuggerAttachedToTab(tabId)) {
       throw new Error("Debugger attach did not complete");
     }
+    for (const target of targets) {
+      if (target.tabId === tabId) continue;
+      try {
+        await attachDebugger(target.tabId);
+      } catch {
+        // Secondary attach failure is retained as a target gap; primary capture continues.
+      }
+    }
     await activateCaptureSession();
-    await recordNavigation(tabId, tab.url, tab.title);
+    for (const target of targets) {
+      await recordNavigation(target.tabId, target.url, target.title);
+      await captureBrowserContext(target.tabId);
+      await capturePerformanceSignal(target.tabId);
+    }
   } catch (err) {
+    await detachDebugger();
     await clearSessionData();
     throw err;
   }
@@ -137,9 +196,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const redactionConfig = await resetRedactionConfigPreference();
         return { ok: true, redactionConfig };
       }
+      case MessageType.GET_REDACTION_PREVIEW:
+        await loadRedactionConfig();
+        return { ok: true, preview: buildRedactionPreview() };
       case MessageType.ADD_MARKER: {
         const session = await getActiveSession();
         if (!session || session.paused) return { ok: false, error: "Resume capture before adding a marker" };
+        await captureBrowserContext(session.tabId);
+        await capturePerformanceSignal(session.tabId);
+        const evidence = await readSessionData();
         const note = typeof message.note === "string" ? message.note.trim().slice(0, 500) : "";
         let url = session.tabUrl;
         try {
@@ -156,6 +221,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           note: note || undefined,
           url,
           tabId: session.tabId,
+          nearestNetworkId: nearestEventId(evidence.network, session.tabId, Date.now()),
+          nearestConsoleId: nearestEventId(evidence.console, session.tabId, Date.now()),
         };
         await appendMarker(marker);
         return { ok: true, markerId: marker.id };

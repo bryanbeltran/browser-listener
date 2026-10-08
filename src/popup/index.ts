@@ -7,6 +7,7 @@ import { REDACTION_PREFERENCE_KEY } from "../persistence/preferences.js";
 import { REDACTION_CONFIG_KEY } from "../persistence/preferences.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import type { CaptureProfile, RedactionConfig } from "../shared/types.js";
+import { isCaptureableUrl } from "../shared/urls.js";
 import { readPopupState } from "./popup-state.js";
 import { sendMessageWithTimeout } from "./messaging.js";
 
@@ -27,6 +28,8 @@ const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
+const targetTabsField = el<HTMLFieldSetElement>("target-tabs");
+const targetTabsList = el("target-tabs-list");
 const captureProfileSelect = el<HTMLSelectElement>("capture-profile");
 const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
@@ -38,6 +41,8 @@ const redactionRulesJson = el<HTMLTextAreaElement>("redaction-rules-json");
 const redactionConfigStatus = el("redaction-config-status");
 const btnSaveRedactionConfig = el<HTMLButtonElement>("btn-save-redaction-config");
 const btnResetRedactionConfig = el<HTMLButtonElement>("btn-reset-redaction-config");
+const btnPreviewRedaction = el<HTMLButtonElement>("btn-preview-redaction");
+const redactionPreview = el("redaction-preview");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
@@ -159,6 +164,55 @@ function renderRedactionConfig(config: RedactionConfig | undefined, locked: bool
   }
 }
 
+function selectedTargetTabIds(): number[] {
+  if (!targetTabsList) return [];
+  return Array.from(targetTabsList.querySelectorAll<HTMLInputElement>("input[data-tab-id]"))
+    .filter((control) => control.checked)
+    .map((control) => Number(control.dataset.tabId))
+    .filter((tabId) => Number.isInteger(tabId) && tabId >= 0);
+}
+
+function renderTargetTabs(tabs: chrome.tabs.Tab[]): void {
+  if (!targetTabsList) return;
+  const previous = new Set(selectedTargetTabIds());
+  const hasPrevious = previous.size > 0;
+  targetTabsList.replaceChildren();
+  const usableTabs = tabs.filter((tab) => tab.id != null);
+  if (usableTabs.length === 0) {
+    setText(targetTabsList, "No browser tabs are available.");
+    return;
+  }
+  for (const tab of usableTabs) {
+    const tabId = tab.id as number;
+    const captureable = isCaptureableUrl(tab.url);
+    const option = document.createElement("label");
+    option.className = "target-tab-option";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.tabId = String(tabId);
+    input.checked = hasPrevious ? previous.has(tabId) : Boolean(tab.active && captureable);
+    input.disabled = !captureable || Boolean(tab.active);
+    input.setAttribute("aria-label", tab.title || tab.url || `Tab ${tabId}`);
+    const text = document.createElement("span");
+    text.className = "target-tab-label";
+    text.textContent = tab.title || tab.url || `Tab ${tabId}`;
+    const url = document.createElement("span");
+    url.className = "target-tab-url";
+    url.textContent = captureable ? tab.url ?? "" : "Not an HTTP(S) page";
+    text.append(url);
+    option.append(input, text);
+    targetTabsList.append(option);
+  }
+}
+
+async function loadTargetTabs(): Promise<void> {
+  try {
+    renderTargetTabs(await chrome.tabs.query({ currentWindow: true }));
+  } catch {
+    setText(targetTabsList, "Could not list browser tabs.");
+  }
+}
+
 function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true): void {
   const active = state.session?.active ?? false;
   const paused = active && state.session?.paused === true;
@@ -224,6 +278,9 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   }
 
   if (btnStart) btnStart.disabled = active || !(consentCheckbox?.checked ?? false);
+  if (targetTabsField) {
+    targetTabsField.disabled = active || canExport;
+  }
 }
 
 async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
@@ -246,6 +303,7 @@ btnStart?.addEventListener("click", async () => {
         options: {
           profile: (captureProfileSelect?.value || "network-console") as CaptureProfile,
           allowedOrigins: parseOriginList(scopeOriginsInput?.value),
+          targetTabIds: [...new Set([tab.id, ...selectedTargetTabIds()])],
         },
       },
       30_000,
@@ -342,6 +400,27 @@ btnNewSession?.addEventListener("click", async () => {
   await refresh();
 });
 
+btnPreviewRedaction?.addEventListener("click", async () => {
+  if (btnPreviewRedaction) btnPreviewRedaction.disabled = true;
+  setText(redactionConfigStatus, "Generating synthetic preview…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string; preview?: { note: string; ruleSetVersion: string; examples: unknown[] } }>(
+      { type: MessageType.GET_REDACTION_PREVIEW },
+      30_000,
+    );
+    if (!response?.ok || !response.preview) throw new Error(response?.error ?? "Could not generate preview");
+    if (redactionPreview) {
+      redactionPreview.textContent = JSON.stringify(response.preview, null, 2);
+      redactionPreview.classList.remove("hidden");
+    }
+    setText(redactionConfigStatus, `Preview uses synthetic data · ${response.preview.ruleSetVersion}`);
+  } catch (err) {
+    setText(redactionConfigStatus, err instanceof Error ? err.message : "Could not generate preview");
+  } finally {
+    if (btnPreviewRedaction) btnPreviewRedaction.disabled = false;
+  }
+});
+
 async function refresh(): Promise<void> {
   try {
     const state = await readPopupState();
@@ -436,4 +515,5 @@ const versionEl = el("app-version");
 if (versionEl) versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
 
 void refresh();
+void loadTargetTabs();
 setInterval(() => void refresh(), 2000);

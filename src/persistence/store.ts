@@ -28,11 +28,13 @@ import {
   loadRedactionConfig,
 } from "./preferences.js";
 import type {
+  BrowserContextSnapshot,
   CaptureSession,
   ConsoleEntry,
   MarkerEntry,
   NavigationEntry,
   NetworkEntry,
+  PerformanceSignal,
   PopupCounts,
   PopupStateSnapshot,
   SessionData,
@@ -59,6 +61,8 @@ interface PersistedEvidence {
   navigation: NavigationEntry[];
   console: ConsoleEntry[];
   markers: MarkerEntry[];
+  contextSnapshots: BrowserContextSnapshot[];
+  performanceSignals: PerformanceSignal[];
 }
 
 type PersistedEvidenceMap = Record<string, PersistedEvidence>;
@@ -74,7 +78,15 @@ let popupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPopup: PopupCounts | null = null;
 
 export function emptySessionData(): SessionData {
-  return { session: null, network: [], navigation: [], console: [], markers: [] };
+  return {
+    session: null,
+    network: [],
+    navigation: [],
+    console: [],
+    markers: [],
+    contextSnapshots: [],
+    performanceSignals: [],
+  };
 }
 
 function isLegacySessionData(value: unknown): value is SessionData {
@@ -138,6 +150,8 @@ function normalizeEvidence(value: unknown): PersistedEvidence {
     navigation: Array.isArray(evidence?.navigation) ? evidence.navigation : [],
     console: Array.isArray(evidence?.console) ? evidence.console : [],
     markers: Array.isArray(evidence?.markers) ? evidence.markers : [],
+    contextSnapshots: Array.isArray(evidence?.contextSnapshots) ? evidence.contextSnapshots : [],
+    performanceSignals: Array.isArray(evidence?.performanceSignals) ? evidence.performanceSignals : [],
   };
 }
 
@@ -148,6 +162,8 @@ function normalizeSessionData(data: Partial<SessionData>): SessionData {
     navigation: Array.isArray(data.navigation) ? data.navigation : [],
     console: Array.isArray(data.console) ? data.console : [],
     markers: Array.isArray(data.markers) ? data.markers : [],
+    contextSnapshots: Array.isArray(data.contextSnapshots) ? data.contextSnapshots : [],
+    performanceSignals: Array.isArray(data.performanceSignals) ? data.performanceSignals : [],
   };
 }
 
@@ -244,6 +260,8 @@ async function writeEvidence(
         note: safe.note ? redactSensitiveString(safe.note) : undefined,
       };
     }),
+    contextSnapshots: evidence.contextSnapshots.map((entry) => redact ? redactDeep(entry) : entry),
+    performanceSignals: evidence.performanceSignals.map((entry) => redact ? redactDeep(entry) : entry),
   };
   await chrome.storage.local.set({ [EVIDENCE_KEY]: map });
 }
@@ -382,6 +400,8 @@ export async function readSessionData(): Promise<SessionData> {
     navigation: evidence.navigation,
     console: evidence.console,
     markers: evidence.markers,
+    contextSnapshots: evidence.contextSnapshots,
+    performanceSignals: evidence.performanceSignals,
   });
 }
 
@@ -393,9 +413,13 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   const navigation = normalized.navigation.slice(-AUXILIARY_STORAGE_LIMITS.navigationEntries);
   const consoleEntries = normalized.console.slice(-AUXILIARY_STORAGE_LIMITS.consoleEntries);
   const markers = (normalized.markers ?? []).slice(-AUXILIARY_STORAGE_LIMITS.markerEntries);
+  const contextSnapshots = (normalized.contextSnapshots ?? []).slice(-AUXILIARY_STORAGE_LIMITS.contextSnapshots);
+  const performanceSignals = (normalized.performanceSignals ?? []).slice(-AUXILIARY_STORAGE_LIMITS.performanceSignals);
   const navigationTruncated = normalized.navigation.length - navigation.length;
   const consoleTruncated = normalized.console.length - consoleEntries.length;
   const markersTruncated = (normalized.markers?.length ?? 0) - markers.length;
+  const contextTruncated = (normalized.contextSnapshots?.length ?? 0) - contextSnapshots.length;
+  const performanceTruncated = (normalized.performanceSignals?.length ?? 0) - performanceSignals.length;
 
   if (session?.id && normalized.network.length > 0) {
     const stats = await loadCaptureStats(session.id);
@@ -408,16 +432,24 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   }
 
   if (session?.id) {
-    await writeEvidence(session.id, { navigation, console: consoleEntries, markers }, redact);
+    await writeEvidence(session.id, {
+      navigation,
+      console: consoleEntries,
+      markers,
+      contextSnapshots,
+      performanceSignals,
+    }, redact);
   }
 
   const sessionToStore =
-    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0 || markersTruncated > 0)
+    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0 || markersTruncated > 0 || contextTruncated > 0 || performanceTruncated > 0)
       ? bumpTruncation(session, {
           network: truncated,
           navigation: navigationTruncated,
           console: consoleTruncated,
           markers: markersTruncated,
+          contextSnapshots: contextTruncated,
+          performanceSignals: performanceTruncated,
         })
       : session;
   const activeId = sessionToStore?.active ? sessionToStore.id : null;
@@ -450,6 +482,8 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
     navigation,
     console: consoleEntries,
     markers,
+    contextSnapshots,
+    performanceSignals,
   });
 }
 
@@ -637,8 +671,8 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
 }
 
 async function appendBoundedEvidenceNow(
-  kind: "navigation" | "console" | "markers",
-  entry: NavigationEntry | ConsoleEntry | MarkerEntry,
+  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal,
 ): Promise<void> {
   const meta = await readPersistedMeta();
   if (!meta.session?.active || meta.session.paused || meta.session.id !== entry.sessionId) return;
@@ -646,7 +680,7 @@ async function appendBoundedEvidenceNow(
   const evidence = await readEvidence(entry.sessionId);
   const truncation = emptyTruncation();
   const redact = shouldRedact(meta.session);
-  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry | MarkerEntry;
+  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal;
   if (redact && kind === "console") {
     const consoleEntry = safeEntry as ConsoleEntry;
     consoleEntry.text = redactSensitiveString(consoleEntry.text);
@@ -672,13 +706,13 @@ async function appendBoundedEvidenceNow(
       "console",
     );
   } else {
-    pushWithCap(
-      evidence.markers,
-      safeEntry as MarkerEntry,
-      AUXILIARY_STORAGE_LIMITS.markerEntries,
-      truncation,
-      "markers",
-    );
+    if (kind === "markers") {
+      pushWithCap(evidence.markers, safeEntry as MarkerEntry, AUXILIARY_STORAGE_LIMITS.markerEntries, truncation, kind);
+    } else if (kind === "contextSnapshots") {
+      pushWithCap(evidence.contextSnapshots, safeEntry as BrowserContextSnapshot, AUXILIARY_STORAGE_LIMITS.contextSnapshots, truncation, kind);
+    } else {
+      pushWithCap(evidence.performanceSignals, safeEntry as PerformanceSignal, AUXILIARY_STORAGE_LIMITS.performanceSignals, truncation, kind);
+    }
   }
 
   await writeEvidence(entry.sessionId, evidence, redact);
@@ -699,8 +733,8 @@ async function appendBoundedEvidenceNow(
 }
 
 function appendBoundedEvidence(
-  kind: "navigation" | "console" | "markers",
-  entry: NavigationEntry | ConsoleEntry | MarkerEntry,
+  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal,
 ): Promise<void> {
   const previous = evidenceQueues.get(entry.sessionId) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(() => appendBoundedEvidenceNow(kind, entry));
@@ -726,6 +760,14 @@ export async function appendConsole(entry: ConsoleEntry): Promise<void> {
 
 export async function appendMarker(entry: MarkerEntry): Promise<void> {
   await appendBoundedEvidence("markers", entry);
+}
+
+export async function appendContextSnapshot(entry: BrowserContextSnapshot): Promise<void> {
+  await appendBoundedEvidence("contextSnapshots", entry);
+}
+
+export async function appendPerformanceSignal(entry: PerformanceSignal): Promise<void> {
+  await appendBoundedEvidence("performanceSignals", entry);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {

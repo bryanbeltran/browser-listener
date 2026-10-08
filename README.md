@@ -58,15 +58,15 @@ Redaction is enabled by default before persistence and again at export. The popu
 
 ## Core flow
 
-1. Popup grants explicit capture intent for current tab through `activeTab` and loads the persisted redaction preference.
-2. Service worker snapshots capture options, including redaction state, then creates session metadata and attaches CDP debugger.
-3. The selected profile fixes capture scope for the session; CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries. Pause temporarily suspends evidence capture while preserving the session.
+1. Popup grants explicit capture intent and lets the user select the current tab plus any additional HTTP(S) tabs through `activeTab`/`tabs`.
+2. Service worker validates every selected tab, snapshots capture options including redaction state, then creates session metadata and attaches CDP independently to each target.
+3. The selected profile fixes capture scope for the session; CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries for selected targets. Pause temporarily suspends evidence capture while preserving the session.
 4. Storage keeps network data in IndexedDB and low-volume evidence in bounded local storage.
 5. Stop detaches CDP, snapshots health, builds four artifacts, and downloads ZIP locally.
 
 ## Privacy and permissions
 
-Capture has no broad host permissions and no remote service. `activeTab` scopes user-triggered access to the current page. Redaction defaults on and covers sensitive headers, cookies, tokens, URL parameters, bodies, console values, and configured patterns. Users can explicitly disable it for a session; the popup warns before capture.
+Capture has no broad host permissions and no remote service. `activeTab` and the explicit tab picker scope user-triggered access to selected pages. Redaction defaults on and covers sensitive headers, cookies, tokens, URL parameters, bodies, console values, and configured patterns. Users can explicitly disable it for a session; the popup warns before capture.
 
 | Permission | Purpose |
 |------------|---------|
@@ -74,6 +74,7 @@ Capture has no broad host permissions and no remote service. `activeTab` scopes 
 | `unlimitedStorage` | IndexedDB network budget |
 | `downloads` | Local ZIP download |
 | `activeTab` | Explicit user-activated current-tab access |
+| `tabs` | Enumerate and validate explicitly selected tabs |
 | `debugger` | CDP capture while the session is active |
 
 Chrome displays its debugger warning while capture is active. MV3 service-worker restarts and debugger detaches are recovered when possible and recorded in session health.

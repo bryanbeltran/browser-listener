@@ -9,6 +9,7 @@ import { prepareZipExport } from "../export/orchestrator.js";
 import { downloadZipFromWorker } from "../export/download.js";
 import type { SessionSummary } from "../shared/types.js";
 import { recordNavigation } from "./session-manager.js";
+import { captureBrowserContext, capturePerformanceSignal } from "./context.js";
 
 type ZipExportBundle = {
   zip: Uint8Array;
@@ -22,16 +23,21 @@ async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
   const active = await getActiveSession();
   const session = active ?? (await readSessionMeta());
 
-  if (session?.tabId != null && session.active) {
-    try {
-      const tab = await chrome.tabs.get(session.tabId);
-      if (tab.url) {
-        await recordNavigation(session.tabId, tab.url, tab.title);
+  if (session?.active) {
+    const targetIds = [...new Set([session.tabId, ...(session.targets ?? []).map((target) => target.tabId)])];
+    for (const tabId of targetIds) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.url) {
+          await recordNavigation(tabId, tab.url, tab.title);
+        }
+        await captureBrowserContext(tabId);
+        await capturePerformanceSignal(tabId);
+      } catch {
+        /* target unavailable — keep the rest of the selected targets */
       }
-      await flushPendingBodyCaptures();
-    } catch {
-      /* tab unavailable — partial export */
     }
+    await flushPendingBodyCaptures();
   }
 
   if (session) {

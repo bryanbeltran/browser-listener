@@ -1,4 +1,10 @@
-import type { ArtifactManifestEntry, CoverageReport, ExportManifest, SessionData } from "../shared/types.js";
+import type {
+  ArtifactManifestEntry,
+  CoverageReport,
+  ExportManifest,
+  ExportProvenance,
+  SessionData,
+} from "../shared/types.js";
 import {
   captureProfileDefaults,
   DEFAULT_CAPTURE_OPTIONS,
@@ -24,6 +30,7 @@ export function buildExportManifest(
   files: ArtifactManifestEntry[] = baseManifestFiles(),
   coverage: CoverageReport = buildCoverageReport(data),
   exportedAt = coverage.generatedAt,
+  provenance?: ExportProvenance,
 ): ExportManifest {
   const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
   const profile = inferCaptureProfile(data.session?.options);
@@ -46,13 +53,14 @@ export function buildExportManifest(
       audit: buildRedactionAudit(data),
       captureBodies: options.captureBodies,
       captureConsole: options.captureConsole,
-      scope: "active-tab",
+      scope: (data.session?.targets?.length ?? 1) > 1 ? "selected-tabs" : "active-tab",
       localOnly: true,
       remoteUpload: false,
       redactionEnabled: data.session?.options?.redactionEnabled !== false,
     },
     options,
     files,
+    ...(provenance ? { provenance } : {}),
     coverage,
     health: data.session?.health ?? {
       debuggerAttached: false,

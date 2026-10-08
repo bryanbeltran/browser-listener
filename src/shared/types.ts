@@ -11,6 +11,8 @@ export interface CaptureOptions {
   redactionEnabled: boolean;
   /** Optional exact HTTP(S) origin allowlist; omitted means page plus dependencies. */
   allowedOrigins?: string[];
+  /** Explicitly selected tab IDs; omitted means the primary tab only. */
+  targetTabIds?: number[];
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -80,6 +82,9 @@ export interface MarkerEntry {
   url?: string;
   tabId?: number;
   frameId?: number;
+  /** Nearest evidence chosen at marker creation; IDs only, never copied values. */
+  nearestNetworkId?: string;
+  nearestConsoleId?: string;
 }
 
 export interface StorageTruncation {
@@ -88,6 +93,8 @@ export interface StorageTruncation {
   console: number;
   /** Added in export schema v3; optional for legacy session metadata. */
   markers?: number;
+  contextSnapshots?: number;
+  performanceSignals?: number;
 }
 
 export interface SessionHealth {
@@ -121,6 +128,19 @@ export interface PauseInterval {
   durationMs?: number;
 }
 
+/** Explicitly consented capture target; optional for legacy single-tab sessions. */
+export interface CaptureTarget {
+  tabId: number;
+  url?: string;
+  title?: string;
+  openerTabId?: number;
+  frameIds?: number[];
+  debuggerAttached?: boolean;
+  debuggerEverAttached?: boolean;
+  tabClosed?: boolean;
+  partialGaps?: HealthGap[];
+}
+
 export interface CaptureSession {
   id: string;
   active: boolean;
@@ -136,6 +156,7 @@ export interface CaptureSession {
   tabClosedDuringCapture?: boolean;
   paused?: boolean;
   pauseIntervals?: PauseInterval[];
+  targets?: CaptureTarget[];
 }
 
 /** Slim session fields for popup UI. */
@@ -206,6 +227,34 @@ export interface NetworkEntry {
   bodyCaptured?: boolean;
 }
 
+/** Low-volume page metadata snapshot; page content and DOM are intentionally excluded. */
+export interface BrowserContextSnapshot {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  tabId: number;
+  frameId?: number;
+  url?: string;
+  title?: string;
+  visibilityState?: "visible" | "hidden" | "prerender" | string;
+  focused?: boolean;
+  online?: boolean;
+  viewport?: { width: number; height: number };
+  deviceScaleFactor?: number;
+  source: "Runtime.evaluate" | "tabs.get";
+}
+
+/** Selected CDP performance aggregates, never a DOM or page snapshot. */
+export interface PerformanceSignal {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  tabId: number;
+  samplingIntervalMs?: number;
+  browserSupport: "cdp-performance-v1" | "unsupported";
+  metrics: Record<string, number>;
+}
+
 export interface ArtifactManifestEntry {
   path: string;
   kind: "report" | "har" | "json" | "other";
@@ -213,6 +262,8 @@ export interface ArtifactManifestEntry {
   enabled: boolean;
   schemaVersion?: number;
   bytes?: number;
+  /** SHA-256 of the materialized artifact; omitted for the self-referential manifest. */
+  sha256?: string;
 }
 
 export interface CoverageMetric {
@@ -231,6 +282,13 @@ export interface CoverageReport {
     tabUrl?: string;
     startedAt?: number;
     stoppedAt?: number;
+    targets?: Array<{
+      tabId: number;
+      url?: string;
+      closed?: boolean;
+      debuggerEverAttached?: boolean;
+      gapCount: number;
+    }>;
   };
   capture: {
     paused: boolean;
@@ -250,6 +308,8 @@ export interface CoverageReport {
     markers: number;
     requestBodies: number;
     responseBodies: number;
+    contextSnapshots: number;
+    performanceSignals: number;
   };
   fields: {
     network: {
@@ -279,6 +339,8 @@ export interface CoverageReport {
     healthGaps: number;
     persistenceErrors: number;
     markersTruncated: number;
+    contextSnapshotsTruncated: number;
+    performanceSignalsTruncated: number;
     filteredNetworkRequests: number;
     partial: boolean;
     gapReasons: string[];
@@ -292,7 +354,7 @@ export interface PrivacyReceipt {
   audit: RedactionAudit;
   captureBodies: boolean;
   captureConsole: boolean;
-  scope: "active-tab";
+  scope: "active-tab" | "selected-tabs";
   localOnly: true;
   remoteUpload: false;
 }
@@ -315,8 +377,19 @@ export interface ExportManifest {
   privacy: PrivacyReceipt;
   options: CaptureOptions;
   files: ArtifactManifestEntry[];
+  provenance?: ExportProvenance;
   coverage: CoverageReport;
   health: SessionHealth;
+}
+
+export interface ExportProvenance {
+  schemaVersion: 1;
+  deterministic: true;
+  checksumAlgorithm: "sha256";
+  sourceSessionId: string;
+  exportedAt: number;
+  redactionRuleSetVersion: string;
+  manifestChecksumExcluded: true;
 }
 
 export interface SessionSummary {
@@ -343,6 +416,53 @@ export interface SessionData {
   console: ConsoleEntry[];
   /** Optional for legacy persisted sessions; normalized reads always provide an array. */
   markers?: MarkerEntry[];
+  contextSnapshots?: BrowserContextSnapshot[];
+  performanceSignals?: PerformanceSignal[];
+}
+
+export type CorrelationNodeType = "network" | "console" | "navigation" | "marker";
+export type CorrelationEdgeType =
+  | "redirect"
+  | "initiator"
+  | "preflight"
+  | "document"
+  | "frame"
+  | "retry"
+  | "cache"
+  | "console-error"
+  | "marker-context";
+export type CorrelationConfidence = "direct" | "supported" | "heuristic";
+
+/** A redaction-safe graph node. It contains identifiers and metadata, never URLs or bodies. */
+export interface CorrelationNode {
+  id: string;
+  eventId: string;
+  type: CorrelationNodeType;
+  timestamp: number;
+  tabId?: number;
+  frameId?: number | string;
+  statusCode?: number;
+  level?: string;
+}
+
+export interface CorrelationEdge {
+  id: string;
+  from: string;
+  to: string;
+  type: CorrelationEdgeType;
+  confidence: CorrelationConfidence;
+  ambiguous: boolean;
+  provenance: {
+    source: string;
+    rule: string;
+  };
+}
+
+/** Deterministic, derived context for explaining relationships between evidence records. */
+export interface CorrelationGraph {
+  schemaVersion: 1;
+  nodes: CorrelationNode[];
+  edges: CorrelationEdge[];
 }
 
 export interface RedactionRule {

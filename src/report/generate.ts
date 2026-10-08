@@ -1,6 +1,7 @@
 import { buildCoverageReport } from "../export/coverage.js";
 import { buildBundleCitation, buildEvidenceCitation } from "../export/citations.js";
 import { buildReproductionSnippets } from "../export/reproduction.js";
+import { buildCorrelationGraph } from "../export/correlation.js";
 import { buildRedactionAudit } from "../redaction/audit.js";
 import type { CoverageReport, SessionData } from "../shared/types.js";
 
@@ -41,6 +42,15 @@ export function generateReportHtml(
     ...entry,
     citation: buildEvidenceCitation(bundleId, "report.html", entry.id, coverage.schemaVersion),
   }));
+  const reportContext = (data.contextSnapshots ?? []).map((entry) => ({
+    ...entry,
+    citation: buildEvidenceCitation(bundleId, "report.html", entry.id, coverage.schemaVersion),
+  }));
+  const reportPerformance = (data.performanceSignals ?? []).map((entry) => ({
+    ...entry,
+    citation: buildEvidenceCitation(bundleId, "report.html", entry.id, coverage.schemaVersion),
+  }));
+  const correlation = buildCorrelationGraph(data);
   const summary = {
     session: data.session,
     bundleCitation: buildBundleCitation(bundleId, coverage.schemaVersion),
@@ -53,6 +63,9 @@ export function generateReportHtml(
     console: reportConsole,
     network: reportNetwork,
     markers: reportMarkers,
+    contextSnapshots: reportContext,
+    performanceSignals: reportPerformance,
+    correlation,
   };
   const json = JSON.stringify(summary).replace(/</g, "\\u003c");
 
@@ -81,6 +94,7 @@ export function generateReportHtml(
   .event-row[hidden] { display: none; }
   .action-button { padding: 7px 10px; border: 1px solid #8886; border-radius: 6px; cursor: pointer; font: inherit; }
   .citation-status { margin-left: 8px; }
+  select { padding: 6px 8px; border: 1px solid #8886; border-radius: 6px; font: inherit; }
 </style>
 </head>
 <body>
@@ -90,11 +104,15 @@ export function generateReportHtml(
   <a href="#summary">Summary</a>
   <a href="#coverage">Coverage</a>
   <a href="#timeline">Timeline</a>
+  <a href="#correlation">Correlations</a>
+  <a href="#context">Context</a>
   <a href="#health">Health</a>
 </nav>
 <section id="summary"></section>
 <section id="coverage"></section>
 <section id="timeline"></section>
+<section id="correlation"></section>
+<section id="context"></section>
 <section id="health"></section>
 <script>
 const DATA = ${json};
@@ -174,6 +192,28 @@ document.getElementById('timeline').innerHTML=timelineHtml;
 
 const h=DATA.session?.health, gaps=h?.partialGaps?.length??0;
 document.getElementById('health').innerHTML='<h2>Capture health</h2><pre class="'+(gaps?'health-warn':'')+'">'+esc(JSON.stringify(h,null,2))+'</pre>';
+
+const correlationSection=document.getElementById('correlation');
+if(correlationSection){
+  const graph=DATA.correlation||{nodes:[],edges:[]};
+  const options=graph.nodes.map(node=>'<option value="'+esc(node.id)+'">'+esc(node.type+' · '+node.eventId)+'</option>').join('');
+  correlationSection.innerHTML='<h2>Evidence correlations</h2><p class="muted">Edges are derived from browser IDs or bounded heuristics. An ambiguous edge is a lead for review, not proof of causality.</p><label for="correlation-focus">Focus event</label> <select id="correlation-focus"><option value="">All relationships</option>'+options+'</select><div id="correlation-table"></div>';
+  const tableNode=document.getElementById('correlation-table'), focus=document.getElementById('correlation-focus');
+  const nodeLabel=(id)=>{const node=graph.nodes.find(candidate=>candidate.id===id);return node?node.type+' · '+node.eventId:id;};
+  const renderCorrelations=()=>{const selected=focus.value;const edges=graph.edges.filter(edge=>!selected||edge.from===selected||edge.to===selected);let html='<table><thead><tr><th>From</th><th>Relationship</th><th>To</th><th>Confidence</th><th>Why connected</th></tr></thead><tbody>';for(const edge of edges){html+='<tr><td>'+esc(nodeLabel(edge.from))+'</td><td>'+esc(edge.type)+'</td><td>'+esc(nodeLabel(edge.to))+'</td><td>'+esc(edge.confidence+(edge.ambiguous?' · ambiguous':''))+'</td><td>'+esc(edge.provenance.source+' — '+edge.provenance.rule)+'</td></tr>';}html+='</tbody></table>';if(!edges.length)html+='<p class="muted">No bounded relationships were found.</p>';if(tableNode)tableNode.innerHTML=html;};
+  focus.addEventListener('change',renderCorrelations);renderCorrelations();
+}
+
+const contextSection=document.getElementById('context');
+if(contextSection){
+  const snapshots=DATA.contextSnapshots||[], performance=DATA.performanceSignals||[];
+  let html='<h2>Browser context and performance</h2><p class="muted">Metadata and aggregate signals only; no DOM, form, clipboard, microphone, or camera content is captured.</p>';
+  html+='<h3>Context snapshots</h3>';
+  html+=snapshots.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>URL</th><th>Viewport</th><th>Visibility</th><th>Focus</th><th>Online</th></tr></thead><tbody>'+snapshots.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+safeLink(entry.url)+'</td><td>'+esc(entry.viewport?entry.viewport.width+' × '+entry.viewport.height:'—')+'</td><td>'+esc(entry.visibilityState||'—')+'</td><td>'+esc(entry.focused==null?'—':entry.focused)+'</td><td>'+esc(entry.online==null?'—':entry.online)+'</td></tr>').join('')+'</tbody></table>':'<p class="muted">No context snapshot was captured.</p>';
+  html+='<h3>Performance samples</h3>';
+  html+=performance.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>Support</th><th>Metrics</th></tr></thead><tbody>'+performance.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+esc(entry.browserSupport)+'</td><td><pre>'+esc(JSON.stringify(entry.metrics))+'</pre></td></tr>').join('')+'</tbody></table>':'<p class="muted">No performance sample was captured.</p>';
+  contextSection.innerHTML=html;
+}
 
 const copyButton=document.getElementById('copy-citation'), citationStatus=document.getElementById('citation-status');
 async function copyText(value){

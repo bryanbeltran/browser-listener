@@ -16,7 +16,7 @@ import {
   inferCaptureProfile,
   normalizeCaptureProfile,
 } from "../shared/types.js";
-import type { CaptureOptions, CaptureSession } from "../shared/types.js";
+import type { CaptureOptions, CaptureSession, CaptureTarget } from "../shared/types.js";
 
 function newHealth(): CaptureSession["health"] {
   return {
@@ -34,11 +34,23 @@ export async function createSession(
   tabId: number,
   tabUrl: string | undefined,
   options: Partial<CaptureOptions> = {},
+  targetTabs?: CaptureTarget[],
 ): Promise<CaptureSession> {
   const allowedOrigins = normalizeOriginAllowlist(options.allowedOrigins);
   await loadRedactionConfig();
   const redactionEnabled = await readRedactionPreference();
   const profile = normalizeCaptureProfile(inferCaptureProfile(options));
+  const targetMap = new Map<number, CaptureTarget>();
+  for (const target of targetTabs ?? []) {
+    targetMap.set(target.tabId, { ...target, partialGaps: target.partialGaps ?? [] });
+  }
+  if (!targetMap.has(tabId)) {
+    targetMap.set(tabId, { tabId, url: tabUrl, partialGaps: [] });
+  }
+  const targets = [
+    targetMap.get(tabId)!,
+    ...[...targetMap.values()].filter((target) => target.tabId !== tabId),
+  ];
   const session: CaptureSession = {
     id: crypto.randomUUID(),
     active: false,
@@ -53,10 +65,12 @@ export async function createSession(
       ...captureProfileDefaults(profile),
       profile,
       ...(allowedOrigins == null ? {} : { allowedOrigins }),
+      targetTabIds: targets.map((target) => target.tabId),
       redactionEnabled,
     },
     paused: false,
     pauseIntervals: [],
+    targets,
     health: newHealth(),
   };
   await clearSessionData();
@@ -156,10 +170,22 @@ export async function updateSessionTabUrl(tabUrl: string): Promise<void> {
 export async function recordNavigation(tabId: number, url: string | undefined, title?: string): Promise<void> {
   if (!url || !isCaptureableUrl(url)) return;
   const session = await getActiveSession();
-  if (!session || session.tabId !== tabId) return;
+  const target = session?.targets?.find((candidate) => candidate.tabId === tabId);
+  if (!session || (session.tabId !== tabId && !target)) return;
   if (session.paused) return;
   if (!isOriginAllowed(url, session.options.allowedOrigins)) return;
-  await updateSessionTabUrl(url);
+  await withSession((data) => ({
+    ...data,
+    session: data.session
+      ? {
+          ...data.session,
+          ...(data.session.tabId === tabId ? { tabUrl: url } : {}),
+          targets: data.session.targets?.map((candidate) =>
+            candidate.tabId === tabId ? { ...candidate, url, title, tabClosed: false } : candidate,
+          ),
+        }
+      : data.session,
+  }));
   await appendNavigation({
     id: crypto.randomUUID(),
     sessionId: session.id,

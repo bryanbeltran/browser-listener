@@ -22,6 +22,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
   const navigation = data.navigation;
   const consoleEntries = data.console;
   const markers = data.markers ?? [];
+  const contextSnapshots = data.contextSnapshots ?? [];
+  const performanceSignals = data.performanceSignals ?? [];
   const requestBodies = network.filter((entry) => hasValue(entry.requestBody));
   const responseBodies = network.filter((entry) => hasValue(entry.responseBody));
   const profile = inferCaptureProfile(data.session?.options);
@@ -36,7 +38,9 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
         (truncation.network > 0 ||
           truncation.navigation > 0 ||
           truncation.console > 0 ||
-          (truncation.markers ?? 0) > 0)) ||
+          (truncation.markers ?? 0) > 0 ||
+          (truncation.contextSnapshots ?? 0) > 0 ||
+          (truncation.performanceSignals ?? 0) > 0)) ||
       (health?.persistenceErrors.length ?? 0) > 0,
   );
 
@@ -49,6 +53,13 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       tabUrl: data.session?.tabUrl,
       startedAt: data.session?.startedAt,
       stoppedAt: data.session?.stoppedAt,
+      targets: (data.session?.targets ?? [{ tabId: data.session?.tabId ?? -1, url: data.session?.tabUrl }]).map((target) => ({
+        tabId: target.tabId,
+        ...(target.url ? { url: target.url } : {}),
+        ...(target.tabClosed == null ? {} : { closed: target.tabClosed }),
+        ...(target.debuggerEverAttached == null ? {} : { debuggerEverAttached: target.debuggerEverAttached }),
+        gapCount: target.partialGaps?.length ?? 0,
+      })),
     },
     capture: {
       paused: data.session?.paused === true,
@@ -72,6 +83,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       markers: markers.length,
       requestBodies: requestBodies.length,
       responseBodies: responseBodies.length,
+      contextSnapshots: contextSnapshots.length,
+      performanceSignals: performanceSignals.length,
     },
     fields: {
       network: {
@@ -106,6 +119,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       healthGaps: health?.partialGaps.length ?? 0,
       persistenceErrors: health?.persistenceErrors.length ?? 0,
       markersTruncated: health?.truncation.markers ?? 0,
+      contextSnapshotsTruncated: health?.truncation.contextSnapshots ?? 0,
+      performanceSignalsTruncated: health?.truncation.performanceSignals ?? 0,
       filteredNetworkRequests: health?.filteredNetworkRequests ?? 0,
       partial,
       gapReasons,

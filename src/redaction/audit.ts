@@ -28,6 +28,8 @@ export function buildRedactionAudit(data: SessionData): RedactionAudit {
     ...data.navigation,
     ...data.console,
     ...(data.markers ?? []),
+    ...(data.contextSnapshots ?? []),
+    ...(data.performanceSignals ?? []),
   ];
   return {
     schemaVersion: REDACTION_AUDIT_SCHEMA_VERSION,

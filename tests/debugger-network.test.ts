@@ -105,4 +105,55 @@ describe("CDP network capture", () => {
     expect(data.network).toHaveLength(0);
     expect(data.session?.health.filteredNetworkRequests).toBe(1);
   });
+
+  it("keeps same request IDs independent across selected tabs", async () => {
+    const { writeSessionData } = await import("../src/persistence/store.js");
+    const current = await readSessionData();
+    await writeSessionData({
+      ...current,
+      session: {
+        ...current.session!,
+        targets: [
+          { tabId: 8, url: "https://example.test/primary", partialGaps: [] },
+          { tabId: 9, url: "https://example.test/secondary", partialGaps: [] },
+        ],
+      },
+    });
+    const { registerDebuggerCapture } = await import("../src/capture/debugger-capture.js");
+    registerDebuggerCapture();
+
+    for (const tabId of [8, 9]) {
+      onEvent?.(
+        { tabId },
+        "Network.requestWillBeSent",
+        {
+          requestId: "same-request-id",
+          request: { url: `https://example.test/api/${tabId}`, method: "GET" },
+        },
+      );
+      onEvent?.(
+        { tabId },
+        "Network.responseReceived",
+        { requestId: "same-request-id", response: { status: 200 } },
+      );
+      onEvent?.({ tabId }, "Network.loadingFinished", { requestId: "same-request-id" });
+    }
+    onEvent?.(
+      { tabId: 99 },
+      "Network.requestWillBeSent",
+      { requestId: "ignored", request: { url: "https://example.test/ignored" } },
+    );
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if ((await readSessionData()).network.length === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const data = await readSessionData();
+    expect(data.network).toHaveLength(2);
+    expect(data.network.map((entry) => entry.tabId).sort()).toEqual([8, 9]);
+    expect(data.network.map((entry) => entry.url).sort()).toEqual([
+      "https://example.test/api/8",
+      "https://example.test/api/9",
+    ]);
+  });
 });
