@@ -39,6 +39,7 @@ import type {
   PerformanceSignal,
   PopupCounts,
   PopupStateSnapshot,
+  ScreenshotEvidence,
   SessionData,
   SessionHistoryEntry,
   DeletionPhase,
@@ -50,6 +51,7 @@ import {
   captureProfileDefaults,
   inferCaptureProfile,
   normalizeCaptureBudgets,
+  normalizeCaptureFilters,
   normalizeCaptureProfile,
   policyEpochFromOptions,
 } from "../shared/types.js";
@@ -75,6 +77,7 @@ interface PersistedEvidence {
   markers: MarkerEntry[];
   contextSnapshots: BrowserContextSnapshot[];
   performanceSignals: PerformanceSignal[];
+  screenshots: ScreenshotEvidence[];
 }
 
 type PersistedEvidenceMap = Record<string, PersistedEvidence>;
@@ -98,6 +101,7 @@ export function emptySessionData(): SessionData {
     markers: [],
     contextSnapshots: [],
     performanceSignals: [],
+    screenshots: [],
   };
 }
 
@@ -150,6 +154,7 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
     captureConsole: hasExplicitProfile ? profileDefaults.captureConsole : session.options?.captureConsole ?? profileDefaults.captureConsole,
     redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
     budgets: normalizeCaptureBudgets(session.options?.budgets),
+    filters: normalizeCaptureFilters(session.options?.filters),
     ...(allowedOrigins == null ? {} : { allowedOrigins }),
   };
   const policyEpochs = session.policyEpochs?.length
@@ -157,6 +162,7 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
         ...epoch,
         allowedOrigins: [...(epoch.allowedOrigins ?? [])],
         budgets: normalizeCaptureBudgets(epoch.budgets),
+        filters: normalizeCaptureFilters(epoch.filters),
       }))
     : [policyEpochFromOptions(options, `legacy-${session.id}`, session.startedAt, session.stoppedAt)];
   return {
@@ -176,6 +182,7 @@ function normalizeEvidence(value: unknown): PersistedEvidence {
     markers: Array.isArray(evidence?.markers) ? evidence.markers : [],
     contextSnapshots: Array.isArray(evidence?.contextSnapshots) ? evidence.contextSnapshots : [],
     performanceSignals: Array.isArray(evidence?.performanceSignals) ? evidence.performanceSignals : [],
+    screenshots: Array.isArray(evidence?.screenshots) ? evidence.screenshots : [],
   };
 }
 
@@ -188,6 +195,7 @@ function normalizeSessionData(data: Partial<SessionData>): SessionData {
     markers: Array.isArray(data.markers) ? data.markers : [],
     contextSnapshots: Array.isArray(data.contextSnapshots) ? data.contextSnapshots : [],
     performanceSignals: Array.isArray(data.performanceSignals) ? data.performanceSignals : [],
+    screenshots: Array.isArray(data.screenshots) ? data.screenshots : [],
   };
 }
 
@@ -260,6 +268,7 @@ function evidenceByteEstimate(data: SessionData): number {
     markers: data.markers ?? [],
     contextSnapshots: data.contextSnapshots ?? [],
     performanceSignals: data.performanceSignals ?? [],
+    screenshots: data.screenshots ?? [],
   };
   return new TextEncoder().encode(JSON.stringify(evidence)).byteLength;
 }
@@ -276,7 +285,8 @@ function historyEntryFromData(data: SessionData, archivedAt = Date.now()): Sessi
       truncation.network > 0 ||
       truncation.navigation > 0 ||
       truncation.console > 0 ||
-      (truncation.markers ?? 0) > 0,
+      (truncation.markers ?? 0) > 0 ||
+      (truncation.screenshots ?? 0) > 0,
   );
   return {
     schemaVersion: 1,
@@ -402,6 +412,7 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
         markers: existingEvidence.markers.length ? existingEvidence.markers : legacyEvidence.markers,
         contextSnapshots: existingEvidence.contextSnapshots.length ? existingEvidence.contextSnapshots : legacyEvidence.contextSnapshots,
         performanceSignals: existingEvidence.performanceSignals.length ? existingEvidence.performanceSignals : legacyEvidence.performanceSignals,
+        screenshots: existingEvidence.screenshots.length ? existingEvidence.screenshots : legacyEvidence.screenshots,
       }, redact);
     }
     await writePersistedMeta({ session });
@@ -470,6 +481,8 @@ async function writeEvidence(
     }),
     contextSnapshots: evidence.contextSnapshots.map((entry) => redact ? redactDeep(entry) : entry),
     performanceSignals: evidence.performanceSignals.map((entry) => redact ? redactDeep(entry) : entry),
+    // Screenshot bytes are opaque base64 data. Text redaction would corrupt them.
+    screenshots: evidence.screenshots,
   };
   await chrome.storage.local.set({ [EVIDENCE_KEY]: map });
 }
@@ -610,6 +623,7 @@ export async function readSessionData(): Promise<SessionData> {
     markers: evidence.markers,
     contextSnapshots: evidence.contextSnapshots,
     performanceSignals: evidence.performanceSignals,
+    screenshots: evidence.screenshots,
   });
 }
 
@@ -747,11 +761,19 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   const markers = (normalized.markers ?? []).slice(-AUXILIARY_STORAGE_LIMITS.markerEntries);
   const contextSnapshots = (normalized.contextSnapshots ?? []).slice(-AUXILIARY_STORAGE_LIMITS.contextSnapshots);
   const performanceSignals = (normalized.performanceSignals ?? []).slice(-AUXILIARY_STORAGE_LIMITS.performanceSignals);
+  const screenshots = (normalized.screenshots ?? []).slice(-AUXILIARY_STORAGE_LIMITS.screenshots);
+  let screenshotBytes = screenshots.reduce((total, entry) => total + (entry.byteLength ?? 0), 0);
   const navigationTruncated = normalized.navigation.length - navigation.length;
   const consoleTruncated = normalized.console.length - consoleEntries.length;
   const markersTruncated = (normalized.markers?.length ?? 0) - markers.length;
   const contextTruncated = (normalized.contextSnapshots?.length ?? 0) - contextSnapshots.length;
   const performanceTruncated = (normalized.performanceSignals?.length ?? 0) - performanceSignals.length;
+  let screenshotsTruncated = (normalized.screenshots?.length ?? 0) - screenshots.length;
+  while (screenshotBytes > AUXILIARY_STORAGE_LIMITS.screenshotBytes && screenshots.length > 0) {
+    const removed = screenshots.shift();
+    screenshotBytes -= removed?.byteLength ?? 0;
+    screenshotsTruncated += 1;
+  }
 
   if (session?.id && normalized.network.length > 0) {
     const stats = await loadCaptureStats(session.id);
@@ -784,11 +806,12 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
       markers,
       contextSnapshots,
       performanceSignals,
+      screenshots,
     }, redact);
   }
 
   const sessionToStore =
-    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0 || markersTruncated > 0 || contextTruncated > 0 || performanceTruncated > 0)
+    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0 || markersTruncated > 0 || contextTruncated > 0 || performanceTruncated > 0 || screenshotsTruncated > 0)
       ? bumpTruncation(session, {
           network: truncated,
           navigation: navigationTruncated,
@@ -796,6 +819,7 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
           markers: markersTruncated,
           contextSnapshots: contextTruncated,
           performanceSignals: performanceTruncated,
+          screenshots: screenshotsTruncated,
         })
       : session;
   const activeId = sessionToStore?.active ? sessionToStore.id : null;
@@ -830,6 +854,7 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
     markers,
     contextSnapshots,
     performanceSignals,
+    screenshots,
   });
 }
 
@@ -1042,8 +1067,8 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
 }
 
 async function appendBoundedEvidenceNow(
-  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals",
-  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal,
+  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals" | "screenshots",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal | ScreenshotEvidence,
 ): Promise<void> {
   const meta = await readPersistedMeta();
   if (!meta.session?.active || meta.session.paused || meta.session.id !== entry.sessionId) return;
@@ -1051,7 +1076,13 @@ async function appendBoundedEvidenceNow(
   const evidence = await readEvidence(entry.sessionId);
   const truncation = emptyTruncation();
   const redact = shouldRedact(meta.session);
-  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal;
+  const safeEntry = (kind === "screenshots" ? entry : redact ? redactDeep(entry) : entry) as
+    | NavigationEntry
+    | ConsoleEntry
+    | MarkerEntry
+    | BrowserContextSnapshot
+    | PerformanceSignal
+    | ScreenshotEvidence;
   if (redact && kind === "console") {
     const consoleEntry = safeEntry as ConsoleEntry;
     consoleEntry.text = redactSensitiveString(consoleEntry.text);
@@ -1076,6 +1107,18 @@ async function appendBoundedEvidenceNow(
       truncation,
       "console",
     );
+  } else if (kind === "screenshots") {
+    evidence.screenshots.push(safeEntry as ScreenshotEvidence);
+    while (evidence.screenshots.length > AUXILIARY_STORAGE_LIMITS.screenshots) {
+      evidence.screenshots.shift();
+      truncation.screenshots = (truncation.screenshots ?? 0) + 1;
+    }
+    let screenshotBytes = evidence.screenshots.reduce((total, screenshot) => total + (screenshot.byteLength ?? 0), 0);
+    while (screenshotBytes > AUXILIARY_STORAGE_LIMITS.screenshotBytes && evidence.screenshots.length > 0) {
+      const removed = evidence.screenshots.shift();
+      screenshotBytes -= removed?.byteLength ?? 0;
+      truncation.screenshots = (truncation.screenshots ?? 0) + 1;
+    }
   } else {
     if (kind === "markers") {
       pushWithCap(evidence.markers, safeEntry as MarkerEntry, AUXILIARY_STORAGE_LIMITS.markerEntries, truncation, kind);
@@ -1104,8 +1147,8 @@ async function appendBoundedEvidenceNow(
 }
 
 function appendBoundedEvidence(
-  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals",
-  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal,
+  kind: "navigation" | "console" | "markers" | "contextSnapshots" | "performanceSignals" | "screenshots",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry | BrowserContextSnapshot | PerformanceSignal | ScreenshotEvidence,
 ): Promise<void> {
   const previous = evidenceQueues.get(entry.sessionId) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(() => appendBoundedEvidenceNow(kind, entry));
@@ -1139,6 +1182,10 @@ export async function appendContextSnapshot(entry: BrowserContextSnapshot): Prom
 
 export async function appendPerformanceSignal(entry: PerformanceSignal): Promise<void> {
   await appendBoundedEvidence("performanceSignals", entry);
+}
+
+export async function appendScreenshot(entry: ScreenshotEvidence): Promise<void> {
+  await appendBoundedEvidence("screenshots", entry);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {

@@ -5,13 +5,20 @@ import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/
 
 describe("CDP network capture", () => {
   let onEvent: ((source: chrome.debugger.Debuggee, method: string, params?: object) => void) | undefined;
+  let sendCommand: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     installChromeStorageMock();
     await writeSessionData({ ...emptySessionData(), session: sampleSession({ active: true, tabId: 8 }) });
+    sendCommand = vi.fn(async (_debuggee: unknown, method: string) => {
+      if (method === "Network.getRequestPostData") return { postData: "message=hello" };
+      if (method === "Network.getResponseBody") return { body: '{"ok":true}', base64Encoded: false };
+      return {};
+    });
     vi.stubGlobal("chrome", {
       ...chrome,
       debugger: {
+        sendCommand,
         onEvent: {
           addListener: vi.fn((listener) => {
             onEvent = listener as typeof onEvent;
@@ -155,5 +162,96 @@ describe("CDP network capture", () => {
       "https://example.test/api/8",
       "https://example.test/api/9",
     ]);
+  });
+
+  it("filters network entries by URL and response MIME and records the gap", async () => {
+    const { writeSessionData } = await import("../src/persistence/store.js");
+    const current = await readSessionData();
+    await writeSessionData({
+      ...current,
+      session: {
+        ...current.session!,
+        options: {
+          ...current.session!.options,
+          filters: {
+            urlIncludes: ["/api"],
+            urlExcludes: [],
+            mimeTypes: ["application/json"],
+          },
+        },
+      },
+    });
+    const { registerDebuggerCapture } = await import("../src/capture/debugger-capture.js");
+    registerDebuggerCapture();
+
+    onEvent?.(
+      { tabId: 8 },
+      "Network.requestWillBeSent",
+      { requestId: "excluded-url", request: { url: "https://example.test/telemetry", method: "GET" } },
+    );
+    onEvent?.(
+      { tabId: 8 },
+      "Network.requestWillBeSent",
+      { requestId: "excluded-mime", request: { url: "https://example.test/api/page", method: "GET" } },
+    );
+    onEvent?.(
+      { tabId: 8 },
+      "Network.responseReceived",
+      { requestId: "excluded-mime", response: { status: 200, mimeType: "text/html" } },
+    );
+
+    let data = await readSessionData();
+    for (let attempt = 0; attempt < 30 && data.session?.health.filteredNetworkRequests !== 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      data = await readSessionData();
+    }
+    expect(data.network).toHaveLength(0);
+    expect(data.session?.health.filteredNetworkRequests).toBe(2);
+  });
+
+  it("captures one armed request body when normal body capture is disabled, then consumes the arm", async () => {
+    const { armOneRequestCapture } = await import("../src/capture/session-manager.js");
+    await armOneRequestCapture();
+    const { registerDebuggerCapture } = await import("../src/capture/debugger-capture.js");
+    registerDebuggerCapture();
+
+    const emitRequest = (requestId: string): void => {
+      onEvent?.(
+        { tabId: 8 },
+        "Network.requestWillBeSent",
+        {
+          requestId,
+          request: {
+            url: `https://example.test/api/${requestId}`,
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+          },
+        },
+      );
+      onEvent?.(
+        { tabId: 8 },
+        "Network.responseReceived",
+        {
+          requestId,
+          response: { status: 200, mimeType: "application/json", headers: { "content-type": "application/json" } },
+        },
+      );
+      onEvent?.({ tabId: 8 }, "Network.loadingFinished", { requestId });
+    };
+
+    emitRequest("one-shot");
+    emitRequest("ordinary");
+
+    let data = await readSessionData();
+    for (let attempt = 0; attempt < 50 && !data.network.find((entry) => entry.oneRequestCapture)?.bodyCaptured; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      data = await readSessionData();
+    }
+    const oneShot = data.network.find((entry) => entry.requestId === "one-shot");
+    const ordinary = data.network.find((entry) => entry.requestId === "ordinary");
+    expect(oneShot).toMatchObject({ oneRequestCapture: true, bodyCaptured: true, responseBody: '{"ok":true}' });
+    expect(ordinary).toMatchObject({ responseBodyState: "excluded", responseBodySkipReason: "capture-disabled" });
+    expect(ordinary?.responseBody).toBeUndefined();
+    expect(sendCommand.mock.calls.filter(([, method]) => method === "Network.getResponseBody")).toHaveLength(1);
   });
 });

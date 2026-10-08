@@ -36,6 +36,9 @@ const targetTabsList = el("target-tabs-list");
 const captureProfileSelect = el<HTMLSelectElement>("capture-profile");
 const sessionNameInput = el<HTMLInputElement>("session-name");
 const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
+const filterUrlIncludesInput = el<HTMLInputElement>("filter-url-includes");
+const filterUrlExcludesInput = el<HTMLInputElement>("filter-url-excludes");
+const filterMimeTypesInput = el<HTMLInputElement>("filter-mime-types");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
 const redactionWarning = el("redaction-warning");
 const redactionKeyList = el<HTMLTextAreaElement>("redaction-key-list");
@@ -65,8 +68,12 @@ const eConsole = el("e-console");
 const eMarkers = el("e-markers");
 const markerNote = el<HTMLInputElement>("marker-note");
 const btnMarker = el<HTMLButtonElement>("btn-marker");
+const btnScreenshot = el<HTMLButtonElement>("btn-screenshot");
 const btnPause = el<HTMLButtonElement>("btn-pause");
 const markerStatus = el("marker-status");
+const screenshotStatus = el("screenshot-status");
+const btnOneRequest = el<HTMLButtonElement>("btn-one-request");
+const oneRequestStatus = el("one-request-status");
 const historySummary = el("history-summary");
 const historyList = el("history-list");
 const btnClearHistory = el<HTMLButtonElement>("btn-clear-history");
@@ -218,6 +225,10 @@ function parseOriginList(value: string | undefined): string[] | undefined {
   return origins.length ? origins : undefined;
 }
 
+function parseFilterList(value: string | undefined): string[] {
+  return parseKeyList(value);
+}
+
 function activeRedactionConfigElement(): boolean {
   const active = document.activeElement;
   return active === redactionKeyList || active === redactionUrlKeyList || active === redactionObjectKeyList || active === redactionRulesJson || active === scopeOriginsInput;
@@ -332,6 +343,8 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
     btnPause.setAttribute("aria-pressed", String(paused));
   }
   if (btnMarker) btnMarker.disabled = !active || paused || stopRequested;
+  if (btnScreenshot) btnScreenshot.disabled = !active || paused || stopRequested;
+  if (btnOneRequest) btnOneRequest.disabled = !active || paused || stopRequested;
   if (btnStop) btnStop.disabled = !active || stopRequested;
 
   if (canExport && state.session) {
@@ -378,6 +391,11 @@ btnStart?.addEventListener("click", async () => {
           profile: (captureProfileSelect?.value || "network-console") as CaptureProfile,
           sessionName: sessionNameInput?.value.trim() || undefined,
           allowedOrigins: parseOriginList(scopeOriginsInput?.value),
+          filters: {
+            urlIncludes: parseFilterList(filterUrlIncludesInput?.value),
+            urlExcludes: parseFilterList(filterUrlExcludesInput?.value),
+            mimeTypes: parseFilterList(filterMimeTypesInput?.value),
+          },
           targetTabIds: [...new Set([tab.id, ...selectedTargetTabIds()])],
         },
       },
@@ -464,6 +482,42 @@ btnMarker?.addEventListener("click", async () => {
     await refresh();
   } catch (err) {
     setText(markerStatus, err instanceof Error ? err.message : "Could not save marker");
+  } finally {
+    await refresh();
+  }
+});
+
+btnScreenshot?.addEventListener("click", async () => {
+  if (btnScreenshot.disabled) return;
+  btnScreenshot.disabled = true;
+  setText(screenshotStatus, "Capturing screenshot…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string; state?: string }>(
+      { type: MessageType.CAPTURE_SCREENSHOT },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Screenshot capture was unavailable");
+    setText(screenshotStatus, "Screenshot saved to the local evidence bundle");
+  } catch (err) {
+    setText(screenshotStatus, err instanceof Error ? err.message : "Screenshot capture was unavailable");
+  } finally {
+    await refresh();
+  }
+});
+
+btnOneRequest?.addEventListener("click", async () => {
+  if (btnOneRequest.disabled) return;
+  btnOneRequest.disabled = true;
+  setText(oneRequestStatus, "Arming one-request body capture…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.ARM_ONE_REQUEST },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not arm one-request capture");
+    setText(oneRequestStatus, "Armed — the next matching request gets one safe, bounded body capture");
+  } catch (err) {
+    setText(oneRequestStatus, err instanceof Error ? err.message : "Could not arm one-request capture");
   } finally {
     await refresh();
   }

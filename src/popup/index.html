@@ -49,6 +49,13 @@
       <label for="scope-origins" class="field-label">Optional origin allowlist</label>
       <input id="scope-origins" class="text-input" type="text" placeholder="https://app.example.com, https://api.example.com" />
       <p class="hint">Leave blank to include the captured page and its dependencies. Exact HTTP(S) origins only.</p>
+      <label for="filter-url-includes" class="field-label">Optional URL include filters</label>
+      <input id="filter-url-includes" class="text-input" type="text" placeholder="api.example.com/*, /graphql" />
+      <label for="filter-url-excludes" class="field-label">Optional URL exclude filters</label>
+      <input id="filter-url-excludes" class="text-input" type="text" placeholder="analytics, /telemetry" />
+      <label for="filter-mime-types" class="field-label">Optional MIME filters</label>
+      <input id="filter-mime-types" class="text-input" type="text" placeholder="application/json, text/*" />
+      <p class="hint">Filters are captured in the session policy. URL patterns support <code>*</code>; MIME filters apply to response metadata.</p>
       <label class="checkbox">
         <input type="checkbox" id="redaction-checkbox" checked />
         <span>Redact secrets and sensitive values (recommended).</span>
@@ -94,6 +101,10 @@
         <button type="button" id="btn-marker" class="secondary">Mark issue</button>
       </div>
       <p id="marker-status" class="hint" aria-live="polite"></p>
+      <button type="button" id="btn-screenshot" class="secondary">Capture screenshot</button>
+      <p id="screenshot-status" class="hint" aria-live="polite">Screenshot capture is explicit and may contain visible secrets.</p>
+      <button type="button" id="btn-one-request" class="secondary">Capture next request body</button>
+      <p id="one-request-status" class="hint" aria-live="polite">Arms one safe, bounded body capture even when the session profile keeps bodies off.</p>
       <button type="button" id="btn-pause" class="secondary" aria-pressed="false">Pause capture</button>
       <button type="button" id="btn-stop" class="primary">Stop &amp; download ZIP</button>
       <p class="hint stop-hint">Stops capture and downloads a ZIP to this device.</p>

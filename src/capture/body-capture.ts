@@ -109,9 +109,10 @@ export async function captureBodiesForRequest(
   tabId: number,
   requestId: string,
   entry: NetworkEntry,
+  force = false,
 ): Promise<Partial<NetworkEntry>> {
   const session = await getActiveSession();
-  if (!session?.options.captureBodies) return {};
+  if (!session || (!session.options.captureBodies && !force)) return {};
   const redact = session.options.redactionEnabled !== false;
 
   const patch: Partial<NetworkEntry> = {};

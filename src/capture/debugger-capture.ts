@@ -9,10 +9,12 @@ import { captureBodiesForRequest } from "./body-capture.js";
 import { getActiveSession } from "./session-manager.js";
 import type { CaptureSession, ConsoleEntry, NetworkEntry } from "../shared/types.js";
 import { isOriginAllowed } from "../shared/urls.js";
+import { matchesCaptureMime, matchesCaptureUrl, matchesOneRequest } from "../shared/capture-filters.js";
 
 const CDP_VERSION = "1.3";
 /** CDP request IDs are only unique within one debugger target. */
 const pendingCdp = new Map<string, Partial<NetworkEntry>>();
+const oneShotRequestKeys = new Set<string>();
 const pendingBodyCaptures = new Set<Promise<void>>();
 const debuggerEventQueues = new Map<number, Promise<void>>();
 const attachedTabIds = new Set<number>();
@@ -46,7 +48,10 @@ async function detachChromeDebugger(tabId: number): Promise<void> {
 
 function clearPendingForTab(tabId: number): void {
   for (const [key, entry] of pendingCdp) {
-    if (entry.tabId === tabId || key.startsWith(`${tabId}:`)) pendingCdp.delete(key);
+    if (entry.tabId === tabId || key.startsWith(`${tabId}:`)) {
+      pendingCdp.delete(key);
+      oneShotRequestKeys.delete(key);
+    }
   }
 }
 
@@ -325,7 +330,12 @@ async function onDebuggerEvent(
     const request = p.request as
       | { url?: string; method?: string; headers?: Record<string, string>; documentURL?: string }
       | undefined;
-    if (!isOriginAllowed(request?.url, session.options.allowedOrigins)) {
+    const url = request?.url;
+    const inCaptureScope = isOriginAllowed(url, session.options.allowedOrigins) && matchesCaptureUrl(url, session.options.filters);
+    const oneShot = Boolean(
+      inCaptureScope && session.oneRequestCapture && matchesOneRequest(url, session.oneRequestCapture.urlIncludes),
+    );
+    if (!inCaptureScope) {
       await patchSession((current) =>
         current
           ? {
@@ -341,6 +351,14 @@ async function onDebuggerEvent(
     }
     const requestId = String(p.requestId ?? "");
     const key = pendingKey(tabId, requestId);
+    if (oneShot) {
+      oneShotRequestKeys.add(key);
+      await patchSession((current) =>
+        current?.oneRequestCapture
+          ? { ...current, oneRequestCapture: undefined }
+          : current,
+      );
+    }
     const previousValue = pendingCdp.get(key);
     const previous = previousValue?.sessionId === session.id ? (previousValue as NetworkEntry) : undefined;
     const initiator = p.initiator as
@@ -355,6 +373,7 @@ async function onDebuggerEvent(
       url: request?.url ?? "",
       method: request?.method ?? "GET",
       type: String(p.type ?? "other"),
+      oneRequestCapture: oneShot || undefined,
       tabId,
       frameId: p.frameId != null ? String(p.frameId) : undefined,
       documentUrl: typeof p.documentURL === "string" ? p.documentURL : request?.documentURL,
@@ -384,6 +403,22 @@ async function onDebuggerEvent(
     const base = prior?.sessionId === session.id ? prior : { requestId, sessionId: session.id, tabId };
     const responseTimestamp = Date.now();
     const contentType = response?.mimeType ?? Object.entries(response?.headers ?? {}).find(([header]) => header.toLowerCase() === "content-type")?.[1];
+    const oneShot = oneShotRequestKeys.has(key) || prior?.oneRequestCapture === true;
+    if (!oneShot && !matchesCaptureMime(contentType, session.options.filters)) {
+      pendingCdp.delete(key);
+      await patchSession((current) =>
+        current
+          ? {
+              ...current,
+              health: {
+                ...current.health,
+                filteredNetworkRequests: (current.health.filteredNetworkRequests ?? 0) + 1,
+              },
+            }
+          : current,
+      );
+      return;
+    }
     const entry: NetworkEntry = {
       ...(base as NetworkEntry),
       id: base.id ?? crypto.randomUUID(),
@@ -401,7 +436,7 @@ async function onDebuggerEvent(
       fromCache: response?.fromDiskCache,
       fromServiceWorker: response?.fromServiceWorker,
       connectionReused: response?.connectionReused,
-      ...(!session.options.captureBodies
+      ...(!session.options.captureBodies && !oneShot
         ? {
             requestBodyState: "excluded" as const,
             requestBodySkipReason: "capture-disabled" as const,
@@ -447,7 +482,8 @@ async function onDebuggerEvent(
       };
       pendingCdp.set(key, completed);
       await upsertNetwork(completed);
-      const bodies = await captureBodiesForRequest(tabId, requestId, completed);
+      const oneShot = oneShotRequestKeys.delete(key) || completed.oneRequestCapture === true;
+      const bodies = await captureBodiesForRequest(tabId, requestId, completed, oneShot);
       if (Object.keys(bodies).length === 0) return;
       const updated: NetworkEntry = { ...completed, ...bodies };
       pendingCdp.set(key, updated);
@@ -553,6 +589,7 @@ export function resetDebuggerCaptureForTests(): void {
     recoverTimer = null;
   }
   pendingCdp.clear();
+  oneShotRequestKeys.clear();
   debuggerEventQueues.clear();
   pendingBodyCaptures.clear();
 }
@@ -612,12 +649,13 @@ export async function snapshotDebuggerHealthForExport(): Promise<void> {
 export async function flushPendingBodyCaptures(): Promise<void> {
   await Promise.all([...pendingBodyCaptures]);
   const session = await getActiveSession();
-  if (!session?.options.captureBodies || attachedTabIds.size === 0) return;
+  if (!session || attachedTabIds.size === 0) return;
 
   const sweep = async (key: string, base: NetworkEntry): Promise<void> => {
     const tabId = base.tabId;
     if (tabId == null || !attachedTabIds.has(tabId) || !base.url || base.bodyCaptured || !base.statusCode) return;
-    const bodies = await captureBodiesForRequest(tabId, base.requestId, base);
+    if (!session.options.captureBodies && !base.oneRequestCapture) return;
+    const bodies = await captureBodiesForRequest(tabId, base.requestId, base, base.oneRequestCapture === true);
     if (Object.keys(bodies).length === 0) return;
     const updated: NetworkEntry = { ...base, ...bodies };
     pendingCdp.set(key, updated);

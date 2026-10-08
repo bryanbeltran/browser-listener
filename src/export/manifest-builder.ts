@@ -38,6 +38,12 @@ function privacyWarnings(data: SessionData, coverage: CoverageReport): string[] 
   if (coverage.quality.bodySkipReasons["unsafe-mime-type"] || coverage.quality.bodySkipReasons["session-budget"]) {
     warnings.push("Some request or response bodies were not retained because of safety or storage policy.");
   }
+  if (data.screenshots?.some((entry) => entry.state === "observed")) {
+    warnings.push("Visual evidence is included; screenshots can contain visible secrets and are not text-redacted.");
+  }
+  if (data.screenshots?.some((entry) => entry.state === "unavailable")) {
+    warnings.push("One or more explicit screenshot requests were unavailable; review capture health before relying on visual absence.");
+  }
   return warnings;
 }
 

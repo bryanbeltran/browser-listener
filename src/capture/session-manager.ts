@@ -15,6 +15,7 @@ import { loadRedactionConfig, readRedactionPreference } from "../persistence/pre
 import {
   captureProfileDefaults,
   DEFAULT_CAPTURE_OPTIONS,
+  normalizeCaptureFilters,
   inferCaptureProfile,
   normalizeCaptureBudgets,
   normalizeCaptureProfile,
@@ -66,6 +67,7 @@ export async function createSession(
     targetTabIds: targets.map((target) => target.tabId),
     redactionEnabled,
     budgets: normalizeCaptureBudgets(options.budgets),
+    filters: normalizeCaptureFilters(options.filters),
     ...(sessionName ? { sessionName } : {}),
   };
   const session: CaptureSession = {
@@ -176,6 +178,24 @@ export async function resumeCapture(): Promise<CaptureSession | null> {
 export async function getActiveSession(): Promise<CaptureSession | null> {
   const session = await readSessionMeta();
   return session?.active ? session : null;
+}
+
+export async function armOneRequestCapture(urlIncludes?: string): Promise<CaptureSession | null> {
+  const pattern = typeof urlIncludes === "string" ? urlIncludes.trim().slice(0, 500) : "";
+  const data = await withSession((current) => {
+    if (!current.session?.active || current.session.paused) return current;
+    return {
+      ...current,
+      session: {
+        ...current.session,
+        oneRequestCapture: {
+          armedAt: Date.now(),
+          ...(pattern ? { urlIncludes: pattern } : {}),
+        },
+      },
+    };
+  });
+  return data.session?.active ? data.session : null;
 }
 
 export async function updateSessionTabUrl(tabUrl: string): Promise<void> {

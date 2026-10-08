@@ -16,6 +16,8 @@ export const AUXILIARY_STORAGE_LIMITS = {
   markerEntries: 500,
   contextSnapshots: 200,
   performanceSignals: 200,
+  screenshots: 12,
+  screenshotBytes: 8 * 1024 * 1024,
 } as const;
 
 /** Body capture is opt-in and bounded independently from metadata storage. */
@@ -37,6 +39,7 @@ export function emptyTruncation(): StorageTruncation {
     markers: 0,
     contextSnapshots: 0,
     performanceSignals: 0,
+    screenshots: 0,
   };
 }
 
@@ -56,7 +59,7 @@ export function totalNetworkBytes(entries: readonly NetworkEntry[]): number {
 
 export function hasTruncation(t: StorageTruncation): boolean {
   return t.network > 0 || t.navigation > 0 || t.console > 0 || (t.markers ?? 0) > 0 ||
-    (t.contextSnapshots ?? 0) > 0 || (t.performanceSignals ?? 0) > 0;
+    (t.contextSnapshots ?? 0) > 0 || (t.performanceSignals ?? 0) > 0 || (t.screenshots ?? 0) > 0;
 }
 
 /** Ring-buffer helper (used in unit tests; production uses IndexedDB eviction). */

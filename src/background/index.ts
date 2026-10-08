@@ -1,6 +1,7 @@
 import { MessageType } from "../shared/messages.js";
 import {
   activateCaptureSession,
+  armOneRequestCapture,
   createSession,
   getActiveSession,
   pauseCapture,
@@ -45,6 +46,7 @@ import type { CaptureOptions, CaptureTarget, MarkerEntry } from "../shared/types
 import { isCaptureableUrl } from "../shared/urls.js";
 import { buildRedactionPreview } from "../redaction/preview.js";
 import { captureBrowserContext, capturePerformanceSignal } from "../capture/context.js";
+import { captureScreenshot } from "../capture/visual-evidence.js";
 
 function nearestEventId(
   entries: Array<{ id: string; timestamp: number; tabId?: number }>,
@@ -256,6 +258,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         };
         await appendMarker(marker);
         return { ok: true, markerId: marker.id };
+      }
+      case MessageType.CAPTURE_SCREENSHOT: {
+        const session = await getActiveSession();
+        if (!session || session.paused) return { ok: false, error: "Resume capture before taking a screenshot" };
+        const screenshot = await captureScreenshot(session.tabId);
+        if (!screenshot) return { ok: false, error: "Screenshot target is unavailable" };
+        return {
+          ok: screenshot.state === "observed",
+          screenshotId: screenshot.id,
+          state: screenshot.state,
+          error: screenshot.reason,
+        };
+      }
+      case MessageType.ARM_ONE_REQUEST: {
+        const session = await armOneRequestCapture(
+          typeof message.urlIncludes === "string" ? message.urlIncludes : undefined,
+        );
+        if (!session) return { ok: false, error: "Resume capture before arming one-request capture" };
+        return { ok: true, armedAt: session.oneRequestCapture?.armedAt };
       }
       case MessageType.PAUSE_CAPTURE: {
         const session = await pauseCapture();

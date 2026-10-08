@@ -95,6 +95,7 @@ interface HarEntry {
     responseBodyEncoding?: NetworkEntry["responseBodyEncoding"];
     requestTransferSize?: number;
     responseTransferSize?: number;
+    oneRequestCapture?: boolean;
     timing?: NetworkEntry["timing"];
   };
 }
@@ -220,6 +221,7 @@ function harEntry(entry: NetworkEntry): HarEntry {
       responseBodyEncoding: entry.responseBodyEncoding,
       requestTransferSize: entry.requestTransferSize,
       responseTransferSize: entry.responseTransferSize,
+      oneRequestCapture: entry.oneRequestCapture,
       timing: entry.timing,
     },
   };

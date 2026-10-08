@@ -7,6 +7,38 @@ export interface CaptureBudgets {
   perCategoryBytes: number;
 }
 
+export interface CaptureFilters {
+  /** Case-insensitive URL substrings or glob patterns to include. Empty means all. */
+  urlIncludes: string[];
+  /** Case-insensitive URL substrings or glob patterns to exclude. */
+  urlExcludes: string[];
+  /** MIME types or type globs (for example application/json or image/*). */
+  mimeTypes: string[];
+}
+
+export const DEFAULT_CAPTURE_FILTERS: CaptureFilters = {
+  urlIncludes: [],
+  urlExcludes: [],
+  mimeTypes: [],
+};
+
+export function normalizeCaptureFilters(value: unknown): CaptureFilters {
+  const candidate = value && typeof value === "object" ? value as Partial<CaptureFilters> : {};
+  const list = (items: unknown, lower = false): string[] =>
+    Array.isArray(items)
+      ? [...new Set(items
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .map((item) => lower ? item.toLowerCase() : item))]
+      : [];
+  return {
+    urlIncludes: list(candidate.urlIncludes),
+    urlExcludes: list(candidate.urlExcludes),
+    mimeTypes: list(candidate.mimeTypes, true),
+  };
+}
+
 export const DEFAULT_CAPTURE_BUDGETS: CaptureBudgets = {
   perOriginBytes: 32 * 1024 * 1024,
   perCategoryBytes: 64 * 1024 * 1024,
@@ -43,6 +75,7 @@ export interface CaptureOptions {
   budgets?: CaptureBudgets;
   /** Optional local label; it never changes event identity or capture scope. */
   sessionName?: string;
+  filters?: CaptureFilters;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -51,6 +84,7 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   captureConsole: true,
   redactionEnabled: true,
   budgets: DEFAULT_CAPTURE_BUDGETS,
+  filters: DEFAULT_CAPTURE_FILTERS,
 };
 
 export function normalizeCaptureProfile(value: unknown): CaptureProfile {
@@ -84,6 +118,7 @@ export interface CapturePolicyEpoch {
   captureConsole: boolean;
   allowedOrigins: string[];
   budgets: CaptureBudgets;
+  filters: CaptureFilters;
 }
 
 export interface CapabilityStatus {
@@ -126,6 +161,7 @@ export function policyEpochFromOptions(
     captureConsole: options.captureConsole !== false,
     allowedOrigins: [...(options.allowedOrigins ?? [])],
     budgets: normalizeCaptureBudgets(options.budgets),
+    filters: normalizeCaptureFilters(options.filters),
   };
 }
 
@@ -181,6 +217,7 @@ export interface StorageTruncation {
   markers?: number;
   contextSnapshots?: number;
   performanceSignals?: number;
+  screenshots?: number;
 }
 
 export interface SessionHealth {
@@ -248,6 +285,10 @@ export interface CaptureSession {
   /** Immutable policy snapshots; legacy sessions are normalized to one epoch on read. */
   policyEpochs?: CapturePolicyEpoch[];
   capabilities?: CapabilityMatrix;
+  oneRequestCapture?: {
+    armedAt: number;
+    urlIncludes?: string;
+  };
 }
 
 /** Slim session fields for popup UI. */
@@ -324,6 +365,8 @@ export interface NetworkEntry {
   responseBodyEncoding?: BodyEncoding;
   requestTransferSize?: number;
   responseTransferSize?: number;
+  /** True when this entry consumed an explicit one-request body-capture arm. */
+  oneRequestCapture?: boolean;
 }
 
 export type CoverageState =
@@ -427,6 +470,19 @@ export interface PerformanceSignal {
   samplingIntervalMs?: number;
   browserSupport: "cdp-performance-v1" | "unsupported";
   metrics: Record<string, number>;
+}
+
+/** Explicitly requested visual evidence; image bytes are never text-redacted. */
+export interface ScreenshotEvidence {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  tabId: number;
+  format: "png";
+  state: "observed" | "unavailable" | "dropped";
+  data?: string;
+  byteLength?: number;
+  reason?: string;
 }
 
 export interface ArtifactManifestEntry {
@@ -639,6 +695,7 @@ export interface SessionData {
   markers?: MarkerEntry[];
   contextSnapshots?: BrowserContextSnapshot[];
   performanceSignals?: PerformanceSignal[];
+  screenshots?: ScreenshotEvidence[];
 }
 
 export type CorrelationNodeType = "network" | "console" | "navigation" | "marker";

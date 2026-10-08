@@ -3,6 +3,7 @@ import { buildBundleCitation, buildEvidenceCitation } from "../export/citations.
 import { buildReproductionSnippets } from "../export/reproduction.js";
 import { buildCorrelationGraph } from "../export/correlation.js";
 import { buildRedactionAudit } from "../redaction/audit.js";
+import { redactSensitiveString } from "../redaction/engine.js";
 import type { CoverageReport, SessionData } from "../shared/types.js";
 
 export function generateReportHtml(
@@ -50,6 +51,16 @@ export function generateReportHtml(
     ...entry,
     citation: buildEvidenceCitation(bundleId, "report.html", entry.id, coverage.schemaVersion),
   }));
+  const reportScreenshots = (data.screenshots ?? []).map((entry) => ({
+    id: entry.id,
+    sessionId: entry.sessionId,
+    timestamp: entry.timestamp,
+    tabId: entry.tabId,
+    format: entry.format,
+    state: entry.state,
+    ...(entry.data ? { artifact: `screenshots/${entry.id.replace(/[^a-zA-Z0-9_-]/g, "_")}.png` } : {}),
+    ...(entry.reason ? { reason: redactSensitiveString(entry.reason) } : {}),
+  }));
   const correlation = buildCorrelationGraph(data);
   const summary = {
     session: data.session,
@@ -65,6 +76,7 @@ export function generateReportHtml(
     markers: reportMarkers,
     contextSnapshots: reportContext,
     performanceSignals: reportPerformance,
+    visualEvidence: reportScreenshots,
     correlation,
   };
   const json = JSON.stringify(summary).replace(/</g, "\\u003c");
@@ -95,6 +107,9 @@ export function generateReportHtml(
   .action-button { padding: 7px 10px; border: 1px solid #8886; border-radius: 6px; cursor: pointer; font: inherit; }
   .citation-status { margin-left: 8px; }
   select { padding: 6px 8px; border: 1px solid #8886; border-radius: 6px; font: inherit; }
+  .visual-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .visual-grid figure { margin: 0; padding: 8px; border: 1px solid #8884; border-radius: 8px; }
+  .visual-grid img { display: block; width: 100%; height: auto; margin-top: 8px; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -106,6 +121,7 @@ export function generateReportHtml(
   <a href="#timeline">Timeline</a>
   <a href="#correlation">Correlations</a>
   <a href="#context">Context</a>
+  <a href="#visual">Visual evidence</a>
   <a href="#health">Health</a>
 </nav>
 <section id="summary"></section>
@@ -113,6 +129,7 @@ export function generateReportHtml(
 <section id="timeline"></section>
 <section id="correlation"></section>
 <section id="context"></section>
+<section id="visual"></section>
 <section id="health"></section>
 <script>
 const DATA = ${json};
@@ -227,6 +244,14 @@ if(contextSection){
   html+='<h3>Performance samples</h3>';
   html+=performance.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>Support</th><th>Metrics</th></tr></thead><tbody>'+performance.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+esc(entry.browserSupport)+'</td><td><pre>'+esc(JSON.stringify(entry.metrics))+'</pre></td></tr>').join('')+'</tbody></table>':'<p class="muted">No performance sample was captured.</p>';
   contextSection.innerHTML=html;
+}
+
+const visualSection=document.getElementById('visual');
+if(visualSection){
+  const screenshots=DATA.visualEvidence||[];
+  let html='<h2>Visual evidence</h2><p class="muted">Screenshots are captured only after an explicit request. Image bytes are opaque and are not text-redacted.</p>';
+  html+=screenshots.length?'<div class="visual-grid">'+screenshots.map(entry=>'<figure><figcaption>'+esc(formatDate(entry.timestamp))+' · tab '+esc(entry.tabId)+' · '+esc(entry.state)+'</figcaption>'+(entry.artifact?'<img loading="lazy" alt="Captured browser view" src="'+esc(entry.artifact)+'" />':'<p class="muted">'+esc(entry.reason||'Screenshot unavailable')+'</p>')+'</figure>').join('')+'</div>':'<p class="muted">No explicit screenshots were captured.</p>';
+  visualSection.innerHTML=html;
 }
 
 const copyButton=document.getElementById('copy-citation'), citationStatus=document.getElementById('citation-status');

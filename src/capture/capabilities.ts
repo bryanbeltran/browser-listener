@@ -16,7 +16,6 @@ export function buildCapabilityMatrix(): CapabilityMatrix {
   const debuggerAvailable = typeof chrome !== "undefined" && typeof chrome.debugger?.sendCommand === "function";
   const storageAvailable = typeof chrome !== "undefined" && typeof chrome.storage?.local?.get === "function";
   const downloadsAvailable = typeof chrome !== "undefined" && typeof chrome.downloads?.download === "function";
-  const screenshotApiAvailable = typeof chrome !== "undefined" && typeof chrome.tabs?.captureVisibleTab === "function";
   let manifestVersion = 3;
   try {
     manifestVersion = chrome.runtime.getManifest().manifest_version;
@@ -42,9 +41,7 @@ export function buildCapabilityMatrix(): CapabilityMatrix {
     },
     bodyRetrieval: capability(debuggerAvailable, "CDP body retrieval requires chrome.debugger"),
     workerTargets: capability(false, "Worker target inventory is not captured by the core adapter"),
-    screenshots: capability(false, screenshotApiAvailable
-      ? "Screenshot API exists but visual evidence is not enabled by the core policy"
-      : "Screenshot API is unavailable in this browser context"),
+    screenshots: capability(debuggerAvailable, "Page.captureScreenshot requires chrome.debugger"),
     downloads: capability(downloadsAvailable, "chrome.downloads is unavailable; page-mediated download may be used"),
     storage: capability(storageAvailable, "chrome.storage.local is unavailable"),
     lifecycleRecovery: capability(debuggerAvailable && storageAvailable, "Debugger and local storage are required for recovery"),

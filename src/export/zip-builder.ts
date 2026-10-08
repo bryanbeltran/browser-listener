@@ -18,11 +18,13 @@ export function zipFileMapFromExport(bundle: {
   rawHar: string;
   rawConsole: string;
   manifest: string;
+  screenshots?: Record<string, Uint8Array>;
 }): ZipFileMap {
   return {
     "report.html": bundle.reportHtml,
     "raw.har": bundle.rawHar,
     "raw-console.json": bundle.rawConsole,
     "export-manifest.json": bundle.manifest,
+    ...(bundle.screenshots ?? {}),
   };
 }
