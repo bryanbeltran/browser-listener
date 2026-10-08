@@ -15,6 +15,8 @@ import type {
   PerformanceSignal,
   ResourceTimingSummary,
 } from "../shared/types.js";
+import { normalizeCaptureFields } from "../shared/types.js";
+import { policyForSession } from "../shared/field-policy.js";
 
 const CONTEXT_EXPRESSION = `(() => ({
   url: location.href,
@@ -131,7 +133,7 @@ function longTaskSummary(value: unknown): LongTaskSummary | undefined {
   };
 }
 
-function frameTreeSnapshot(value: unknown): FrameTreeSnapshot {
+function frameTreeSnapshot(value: unknown, includeUrls = true, frameIds: string[] = []): FrameTreeSnapshot {
   if (!value || typeof value !== "object") return { browserSupport: "cdp-page-v1", frames: [] };
   const root = value as Record<string, unknown>;
   const frames: FrameTreeNode[] = [];
@@ -149,14 +151,20 @@ function frameTreeSnapshot(value: unknown): FrameTreeSnapshot {
       truncated = true;
       return;
     }
-    frames.push({
-      id,
-      ...(typeof frame.parentId === "string" ? { parentId: frame.parentId } : parentId ? { parentId } : {}),
-      ...(typeof frame.url === "string" ? { url: frame.url } : {}),
-      ...(typeof frame.securityOrigin === "string" ? { securityOrigin: frame.securityOrigin } : {}),
-      ...(typeof frame.name === "string" && frame.name ? { name: frame.name } : {}),
-      childCount: children.length,
-    });
+    if (!frameIds.length || frameIds.includes(id)) {
+      frames.push({
+        id,
+        ...(typeof frame.parentId === "string" ? { parentId: frame.parentId } : parentId ? { parentId } : {}),
+        ...(includeUrls && typeof frame.url === "string" ? { url: frame.url } : {}),
+        ...(typeof frame.securityOrigin === "string" ? { securityOrigin: frame.securityOrigin } : {}),
+        ...(typeof frame.name === "string" && frame.name ? { name: frame.name } : {}),
+        childCount: frameIds.length ? children.filter((child) => {
+          const childFrame = child && typeof child === "object" && (child as Record<string, unknown>).frame;
+          const candidateFrame = childFrame && typeof childFrame === "object" ? childFrame as Record<string, unknown> : child as Record<string, unknown>;
+          return typeof candidateFrame?.id === "string" && frameIds.includes(candidateFrame.id);
+        }).length : children.length,
+      });
+    }
     for (const child of children) visit(child, id);
   };
   visit(root.frameTree ?? root);
@@ -168,10 +176,10 @@ function frameTreeSnapshot(value: unknown): FrameTreeSnapshot {
   };
 }
 
-async function captureFrameTree(tabId: number): Promise<FrameTreeSnapshot> {
+async function captureFrameTree(tabId: number, includeUrls: boolean, frameIds: string[]): Promise<FrameTreeSnapshot> {
   try {
     const result = await chrome.debugger.sendCommand({ tabId }, "Page.getFrameTree") as { frameTree?: unknown };
-    return frameTreeSnapshot(result.frameTree);
+    return frameTreeSnapshot(result.frameTree, includeUrls, frameIds);
   } catch {
     return { browserSupport: "unsupported", frames: [] };
   }
@@ -187,6 +195,10 @@ async function activeTarget(tabId: number) {
 export async function captureBrowserContext(tabId: number, frameId?: number): Promise<BrowserContextSnapshot | null> {
   const session = await activeTarget(tabId);
   if (!session || session.paused) return null;
+  const policy = policyForSession(session, session.policyEpochs?.at(-1)?.id);
+  const selectedFrameId = frameId == null ? "0" : String(frameId);
+  if (policy?.frameIds.length && !policy.frameIds.includes(selectedFrameId)) return null;
+  const fields = normalizeCaptureFields(policy?.fields ?? session.options.fields);
   let value: Record<string, unknown> | undefined;
   let source: BrowserContextSnapshot["source"] = "Runtime.evaluate";
   try {
@@ -218,8 +230,8 @@ export async function captureBrowserContext(tabId: number, frameId?: number): Pr
     timestamp: Date.now(),
     tabId,
     ...(frameId == null ? {} : { frameId }),
-    ...(typeof value.url === "string" ? { url: value.url } : {}),
-    ...(typeof value.title === "string" ? { title: value.title } : {}),
+    ...(fields.urls && typeof value.url === "string" ? { url: value.url } : {}),
+    ...(fields.navigationTitles && typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.visibilityState === "string" ? { visibilityState: value.visibilityState } : {}),
     ...(typeof value.focused === "boolean" ? { focused: value.focused } : {}),
     ...(typeof value.online === "boolean" ? { online: value.online } : {}),
@@ -230,9 +242,10 @@ export async function captureBrowserContext(tabId: number, frameId?: number): Pr
     ...(timingSummary(value.navigationTiming) ? { navigationTiming: timingSummary(value.navigationTiming) } : {}),
     ...(resourceTimingSummary(value.resourceTiming) ? { resourceTiming: resourceTimingSummary(value.resourceTiming) } : {}),
     ...(longTaskSummary(value.longTaskSummary) ? { longTaskSummary: longTaskSummary(value.longTaskSummary) } : {}),
-    frameTree: await captureFrameTree(tabId),
+    frameTree: await captureFrameTree(tabId, fields.urls, policy?.frameIds ?? []),
     capabilities: session.capabilities ?? buildCapabilityMatrix(),
     source,
+    policyEpochId: policy?.id,
   };
   await appendContextSnapshot(snapshot);
   return snapshot;
@@ -241,6 +254,8 @@ export async function captureBrowserContext(tabId: number, frameId?: number): Pr
 export async function capturePerformanceSignal(tabId: number): Promise<PerformanceSignal | null> {
   const session = await activeTarget(tabId);
   if (!session || session.paused) return null;
+  const policy = policyForSession(session, session.policyEpochs?.at(-1)?.id);
+  if (policy?.frameIds.length && !policy.frameIds.includes("0")) return null;
   const timestamp = Date.now();
   const metrics: Record<string, number> = {};
   let browserSupport: PerformanceSignal["browserSupport"] = "cdp-performance-v1";
@@ -263,6 +278,7 @@ export async function capturePerformanceSignal(tabId: number): Promise<Performan
     ...(previous ? { samplingIntervalMs: Math.max(0, timestamp - previous.timestamp) } : {}),
     browserSupport,
     metrics,
+    policyEpochId: policy?.id,
   };
   await appendPerformanceSignal(signal);
   return signal;

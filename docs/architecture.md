@@ -20,22 +20,23 @@ flowchart LR
 
 | Module | Responsibility |
 |--------|----------------|
-| `capture/` | Session lifecycle, debugger attach/recovery, safe body policy, stop/export |
+| `capture/` | Session lifecycle, debugger attach/recovery, field/scope policy epochs, safe body policy, expiry, stop/export |
 | `background/` | MV3 service-worker entrypoint and captured-tab lifecycle |
 | `persistence/` | Session metadata, preferences, bounded auxiliary evidence, IndexedDB network store, caps |
 | `redaction/` | Default-deny headers, cookies, URL parameters, body values, and custom rules |
-| `export/` | HAR, coverage, manifest, and four-file ZIP orchestration |
+| `export/` | HAR, coverage, privacy receipt, manifest, report, and four-file ZIP orchestration |
 | `report/` | Searchable offline timeline and health report |
 | `popup/` | Consent gate, session controls, health hints, download handoff |
 
 ## Capture strategy
 
 1. Popup shows the effective capture profile and sends `CONSENT_AND_START` only after the user checks authorization.
-2. Background validates current tab is ordinary HTTP(S), snapshots the immutable profile and policy, then attaches CDP.
-3. CDP `Network.*` records network lifecycle. `Runtime.*` and `Log.entryAdded` record console evidence.
+2. Background validates current tab and selected targets are ordinary HTTP(S), snapshots the profile plus field/scope policy, then attaches CDP.
+3. CDP `Network.*` records network lifecycle. `Runtime.*` and `Log.entryAdded` record console evidence. URL, header, body, argument, title, frame, origin, and tab decisions resolve against the event's policy epoch.
 4. `tabs.onUpdated` records top-frame URL changes for the explicitly captured tab.
-5. Pause/resume suspends debugger evidence and bounded auxiliary persistence; each interval is retained in session metadata. A profile cannot change after start.
-6. CDP detach and MV3 restart paths retry while the session remains active.
+5. Pause/resume suspends debugger evidence and bounded auxiliary persistence; each interval is retained in session metadata. The active policy editor creates a new immutable epoch for scope/field/duration changes.
+6. A duration deadline stops capture and triggers the local ZIP export. MV3 bootstrap re-arms the deadline from persisted session metadata.
+7. CDP detach and MV3 restart paths retry while the session remains active.
 
 There is no broad host monitoring or request interception fallback. CDP is authoritative while the user-visible debugger session is active.
 
@@ -50,6 +51,14 @@ There is no broad host monitoring or request interception fallback. CDP is autho
 
 Redaction is enabled by default before persistence and again at export. Body text is parsed as JSON or form data when possible, then bounded. Headers and sensitive URL parameters are redacted while the preference is enabled. The preference is stored under `browserListenerRedactionEnabled` in `chrome.storage.local`; missing values normalize to enabled. A capture snapshots redaction state in session options, so storage and every export artifact use one consistent policy. Opt-out is explicit in the popup and displays a warning because raw HAR bodies and console records can contain secrets.
 
+Field consent is persisted in the session policy and normalized for legacy
+sessions. Denied values are stripped at each storage/export seam; required URL
+strings use `[EXCLUDED]` and bodies use explicit `field-disabled` states. Epoch
+IDs are carried on raw HAR, console/navigation/context/marker/network records
+and screenshots. The manifest privacy receipt is an accounting view, while
+`raw.har` and `raw-console.json` remain authoritative raw artifacts for the
+retained, policy-safe values.
+
 ## Export contract
 
 The ZIP contains exactly:
@@ -61,7 +70,7 @@ raw-console.json
 export-manifest.json
 ```
 
-`raw.har` is a HAR 1.2 log redacted by default. `raw-console.json` stores console, runtime exception, and browser log records redacted by default. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, redaction state, enabled capture options, coverage, pause intervals, truncation, persistence errors, and debugger gaps.
+`raw.har` is a HAR 1.2 log redacted by default. `raw-console.json` stores console, runtime exception, and browser log records redacted by default. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, redaction state, field receipt, enabled capture options, policy epochs, coverage, pause intervals, truncation, persistence errors, and debugger gaps. The export destination is always `local-device`; there is no upload path.
 
 ## Reliability
 

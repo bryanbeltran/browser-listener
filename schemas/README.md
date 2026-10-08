@@ -11,5 +11,6 @@ These schemas describe the stable, machine-readable contract consumed by the ins
 - Raw artifacts are immutable. A migration creates derived data; it never rewrites a source ZIP.
 - `raw.har` follows HAR 1.2 with Browser Listener metadata under `_browserListener`.
 - `raw-console.json` and report metadata use their own schema versions so derived views can evolve independently.
+- Manifest/coverage v4 include field consent, target-tab/frame/duration policy, immutable policy epochs, screenshot states, and a local-only privacy receipt. The receipt is accounting metadata; raw HAR and console artifacts remain authoritative for retained values.
 
 The schemas intentionally allow extension fields where the capture contract is expected to grow. Semantic changes that make an existing required field mean something different require a new schema version and a migration note.

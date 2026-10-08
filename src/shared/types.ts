@@ -16,6 +16,70 @@ export interface CaptureFilters {
   mimeTypes: string[];
 }
 
+export type CaptureField =
+  | "urls"
+  | "headers"
+  | "requestBodies"
+  | "responseBodies"
+  | "consoleArguments"
+  | "navigationTitles"
+  | "visualEvidence";
+
+/** Independent field consent layered under the named capture profile. */
+export interface CaptureFieldPolicy {
+  urls: boolean;
+  headers: boolean;
+  requestBodies: boolean;
+  responseBodies: boolean;
+  consoleArguments: boolean;
+  navigationTitles: boolean;
+  /** Screenshots still require a separate per-capture button press. */
+  visualEvidence: boolean;
+}
+
+export const DEFAULT_CAPTURE_FIELDS: CaptureFieldPolicy = {
+  urls: true,
+  headers: true,
+  requestBodies: true,
+  responseBodies: true,
+  consoleArguments: true,
+  navigationTitles: true,
+  visualEvidence: false,
+};
+
+export function normalizeCaptureFields(value: unknown): CaptureFieldPolicy {
+  const candidate = value && typeof value === "object" ? value as Partial<CaptureFieldPolicy> : {};
+  return Object.fromEntries(
+    (Object.keys(DEFAULT_CAPTURE_FIELDS) as CaptureField[]).map((field) => [
+      field,
+      candidate[field] == null ? DEFAULT_CAPTURE_FIELDS[field] : candidate[field] !== false,
+    ]),
+  ) as unknown as CaptureFieldPolicy;
+}
+
+export function normalizeFrameIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item): item is string | number => typeof item === "string" || typeof item === "number")
+    .map((item) => String(item).trim())
+    .filter(Boolean))].slice(0, 200);
+}
+
+export function normalizeTargetTabIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item): item is number => typeof item === "number" && Number.isInteger(item) && item >= 0)
+    .map((item) => Math.floor(item)))].slice(0, 100);
+}
+
+export const MAX_CAPTURE_DURATION_MS = 24 * 60 * 60 * 1000;
+
+export function normalizeCaptureDuration(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(MAX_CAPTURE_DURATION_MS, Math.floor(value));
+}
+
 export const DEFAULT_CAPTURE_FILTERS: CaptureFilters = {
   urlIncludes: [],
   urlExcludes: [],
@@ -76,6 +140,12 @@ export interface CaptureOptions {
   /** Optional local label; it never changes event identity or capture scope. */
   sessionName?: string;
   filters?: CaptureFilters;
+  /** Independent field-level consent; omitted by legacy sessions and normalized on read. */
+  fields?: CaptureFieldPolicy;
+  /** Optional frame allowlist; empty means all frames in selected tabs. */
+  frameIds?: string[];
+  /** Optional maximum duration for the current policy interval. */
+  durationMs?: number;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -85,6 +155,7 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   redactionEnabled: true,
   budgets: DEFAULT_CAPTURE_BUDGETS,
   filters: DEFAULT_CAPTURE_FILTERS,
+  fields: DEFAULT_CAPTURE_FIELDS,
 };
 
 export function normalizeCaptureProfile(value: unknown): CaptureProfile {
@@ -119,6 +190,10 @@ export interface CapturePolicyEpoch {
   allowedOrigins: string[];
   budgets: CaptureBudgets;
   filters: CaptureFilters;
+  fields: CaptureFieldPolicy;
+  frameIds: string[];
+  targetTabIds: number[];
+  durationMs?: number;
 }
 
 export interface CapabilityStatus {
@@ -162,6 +237,12 @@ export function policyEpochFromOptions(
     allowedOrigins: [...(options.allowedOrigins ?? [])],
     budgets: normalizeCaptureBudgets(options.budgets),
     filters: normalizeCaptureFilters(options.filters),
+    fields: normalizeCaptureFields(options.fields),
+    frameIds: normalizeFrameIds(options.frameIds),
+    targetTabIds: normalizeTargetTabIds(options.targetTabIds),
+    ...(normalizeCaptureDuration(options.durationMs) == null
+      ? {}
+      : { durationMs: normalizeCaptureDuration(options.durationMs) }),
   };
 }
 
@@ -173,6 +254,7 @@ export interface NavigationEntry {
   title?: string;
   tabId?: number;
   frameId?: number;
+  policyEpochId?: string;
 }
 
 export type ConsoleLevel = "verbose" | "debug" | "info" | "log" | "warning" | "error";
@@ -192,6 +274,7 @@ export interface ConsoleEntry {
   columnNumber?: number;
   stackTrace?: string;
   args?: string[];
+  policyEpochId?: string;
 }
 
 /** A user-authored point-in-time annotation that anchors human reproduction steps. */
@@ -207,6 +290,7 @@ export interface MarkerEntry {
   /** Nearest evidence chosen at marker creation; IDs only, never copied values. */
   nearestNetworkId?: string;
   nearestConsoleId?: string;
+  policyEpochId?: string;
 }
 
 export interface StorageTruncation {
@@ -285,6 +369,8 @@ export interface CaptureSession {
   /** Immutable policy snapshots; legacy sessions are normalized to one epoch on read. */
   policyEpochs?: CapturePolicyEpoch[];
   capabilities?: CapabilityMatrix;
+  /** Wall-clock deadline for the active policy interval, when configured. */
+  expiresAt?: number;
   oneRequestCapture?: {
     armedAt: number;
     urlIncludes?: string;
@@ -296,10 +382,19 @@ export interface PopupSessionView {
   id: string;
   active: boolean;
   startedAt: number;
+  primaryTabId?: number;
   stoppedAt?: number;
   tabClosedDuringCapture?: boolean;
   paused?: boolean;
   allowedOrigins?: string[];
+  targetTabIds?: number[];
+  filters?: CaptureFilters;
+  fields?: CaptureFieldPolicy;
+  frameIds?: string[];
+  durationMs?: number;
+  policyEpochCount?: number;
+  currentPolicyEpochId?: string;
+  expiresAt?: number;
   health: Pick<
     SessionHealth,
     "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation" | "lastAttachError"
@@ -311,6 +406,7 @@ export interface PopupCounts {
   navigation: number;
   console: number;
   markers?: number;
+  screenshots?: number;
 }
 
 export interface PopupStateSnapshot {
@@ -367,6 +463,7 @@ export interface NetworkEntry {
   responseTransferSize?: number;
   /** True when this entry consumed an explicit one-request body-capture arm. */
   oneRequestCapture?: boolean;
+  policyEpochId?: string;
 }
 
 export type CoverageState =
@@ -384,6 +481,7 @@ export type BodySkipReason =
   | "no-body"
   | "body-unavailable"
   | "capture-error"
+  | "field-disabled"
   | "per-response-cap"
   | "session-budget";
 
@@ -433,6 +531,7 @@ export interface CoverageStateSummary {
   navigation: CoverageStateCounts;
   console: CoverageStateCounts;
   markers: CoverageStateCounts;
+  screenshots: CoverageStateCounts;
   bodies: {
     request: CoverageStateCounts;
     response: CoverageStateCounts;
@@ -459,6 +558,7 @@ export interface BrowserContextSnapshot {
   longTaskSummary?: LongTaskSummary;
   capabilities?: CapabilityMatrix;
   source: "Runtime.evaluate" | "tabs.get";
+  policyEpochId?: string;
 }
 
 /** Selected CDP performance aggregates, never a DOM or page snapshot. */
@@ -470,6 +570,7 @@ export interface PerformanceSignal {
   samplingIntervalMs?: number;
   browserSupport: "cdp-performance-v1" | "unsupported";
   metrics: Record<string, number>;
+  policyEpochId?: string;
 }
 
 /** Explicitly requested visual evidence; image bytes are never text-redacted. */
@@ -479,10 +580,11 @@ export interface ScreenshotEvidence {
   timestamp: number;
   tabId: number;
   format: "png";
-  state: "observed" | "unavailable" | "dropped";
+  state: "observed" | "unavailable" | "excluded" | "dropped";
   data?: string;
   byteLength?: number;
   reason?: string;
+  policyEpochId?: string;
 }
 
 export interface ArtifactManifestEntry {
@@ -532,6 +634,10 @@ export interface CoverageReport {
     captureConsole: boolean;
     allowedOrigins: string[];
     budgets: CaptureBudgets;
+    fields: CaptureFieldPolicy;
+    frameIds: string[];
+    targetTabIds: number[];
+    durationMs?: number;
     epochs: CapturePolicyEpoch[];
   };
   totals: {
@@ -575,6 +681,7 @@ export interface CoverageReport {
     markersTruncated: number;
     contextSnapshotsTruncated: number;
     performanceSignalsTruncated: number;
+    screenshotsTruncated: number;
     filteredNetworkRequests: number;
     fairBudgetEvictions: number;
     bodySkipReasons: Partial<Record<BodySkipReason, number>>;
@@ -595,7 +702,19 @@ export interface PrivacyReceipt {
   remoteUpload: false;
   policyEpochs: CapturePolicyEpoch[];
   states: CoverageStateSummary;
+  fields: Record<CaptureField, PrivacyFieldReceipt>;
+  exportDestination: "local-device";
+  userConfirmedExceptions: string[];
   warnings: string[];
+}
+
+export interface PrivacyFieldReceipt {
+  captured: number;
+  excluded: number;
+  redacted: number;
+  truncated: number;
+  dropped: number;
+  unavailable: number;
 }
 
 export interface RedactionAudit {

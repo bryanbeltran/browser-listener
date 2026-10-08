@@ -21,7 +21,7 @@
   "$defs": {
     "privacy": {
       "type": "object",
-      "required": ["schemaVersion", "redactionEnabled", "redactionRuleSetVersion", "audit", "captureBodies", "captureConsole", "scope", "localOnly", "remoteUpload", "policyEpochs", "states", "warnings"],
+      "required": ["schemaVersion", "redactionEnabled", "redactionRuleSetVersion", "audit", "captureBodies", "captureConsole", "scope", "localOnly", "remoteUpload", "policyEpochs", "states", "fields", "exportDestination", "userConfirmedExceptions", "warnings"],
       "properties": {
         "schemaVersion": { "const": 2 },
         "redactionEnabled": { "type": "boolean" },
@@ -34,7 +34,34 @@
         "remoteUpload": { "const": false },
         "policyEpochs": { "type": "array", "items": { "$ref": "coverage.v4.schema.json#/$defs/policyEpoch" } },
         "states": { "$ref": "coverage.v4.schema.json#/$defs/stateSummary" },
+        "fields": {
+          "type": "object",
+          "required": ["urls", "headers", "requestBodies", "responseBodies", "consoleArguments", "navigationTitles", "visualEvidence"],
+          "properties": {
+            "urls": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "headers": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "requestBodies": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "responseBodies": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "consoleArguments": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "navigationTitles": { "$ref": "#/$defs/privacyFieldReceipt" },
+            "visualEvidence": { "$ref": "#/$defs/privacyFieldReceipt" }
+          }
+        },
+        "exportDestination": { "const": "local-device" },
+        "userConfirmedExceptions": { "type": "array", "items": { "type": "string" } },
         "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "privacyFieldReceipt": {
+      "type": "object",
+      "required": ["captured", "excluded", "redacted", "truncated", "dropped", "unavailable"],
+      "properties": {
+        "captured": { "type": "integer", "minimum": 0 },
+        "excluded": { "type": "integer", "minimum": 0 },
+        "redacted": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "integer", "minimum": 0 },
+        "dropped": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 }
       }
     },
     "options": {
@@ -45,6 +72,9 @@
         "captureBodies": { "type": "boolean" },
         "captureConsole": { "type": "boolean" },
         "redactionEnabled": { "type": "boolean" },
+        "fields": { "$ref": "coverage.v4.schema.json#/$defs/fields" },
+        "frameIds": { "type": "array", "items": { "type": "string" } },
+        "durationMs": { "type": "integer", "minimum": 1 },
         "allowedOrigins": { "type": "array", "items": { "type": "string", "format": "uri" } },
         "targetTabIds": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
         "budgets": {

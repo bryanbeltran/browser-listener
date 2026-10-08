@@ -62,6 +62,18 @@ function assertCoverage(coverage) {
     if (!Array.isArray(coverage.policy.allowedOrigins)) {
       throw new Error("Coverage origin policy is missing");
     }
+    if (coverage.schemaVersion >= 4) {
+      if (!coverage.policy.fields || typeof coverage.policy.fields !== "object") throw new Error("Coverage field consent is missing");
+      for (const key of ["urls", "headers", "requestBodies", "responseBodies", "consoleArguments", "navigationTitles", "visualEvidence"]) {
+        if (typeof coverage.policy.fields[key] !== "boolean") throw new Error(`Coverage field consent is missing: ${key}`);
+      }
+      if (!Array.isArray(coverage.policy.frameIds) || !Array.isArray(coverage.policy.targetTabIds)) {
+        throw new Error("Coverage frame/tab policy is missing");
+      }
+      if (!coverage.states || typeof coverage.states.screenshots !== "object") {
+        throw new Error("Coverage screenshot state is missing");
+      }
+    }
   }
 }
 
@@ -96,6 +108,11 @@ function validateCurrentExport(archive, manifest, readJson, warnings) {
   assertCoverage(manifest.coverage);
   if (!manifest.privacy || typeof manifest.privacy.redactionEnabled !== "boolean") {
     throw new Error("Manifest privacy receipt is missing redaction state");
+  }
+  if (manifest.schemaVersion >= 4) {
+    if (manifest.privacy.exportDestination !== "local-device") throw new Error("Manifest export destination is not local-device");
+    if (!Array.isArray(manifest.privacy.userConfirmedExceptions)) throw new Error("Manifest privacy exceptions are missing");
+    if (!manifest.privacy.fields || typeof manifest.privacy.fields !== "object") throw new Error("Manifest field privacy receipt is missing");
   }
   if (manifest.privacy.redactionEnabled === false) {
     warnings.push("Redaction is disabled; this export may contain secrets");

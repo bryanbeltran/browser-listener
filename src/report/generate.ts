@@ -2,9 +2,9 @@ import { buildCoverageReport } from "../export/coverage.js";
 import { buildBundleCitation, buildEvidenceCitation } from "../export/citations.js";
 import { buildReproductionSnippets } from "../export/reproduction.js";
 import { buildCorrelationGraph } from "../export/correlation.js";
-import { buildRedactionAudit } from "../redaction/audit.js";
 import { redactSensitiveString } from "../redaction/engine.js";
 import type { CoverageReport, SessionData } from "../shared/types.js";
+import { buildPrivacyReceipt } from "../export/privacy-receipt.js";
 
 export function generateReportHtml(
   data: SessionData,
@@ -62,14 +62,12 @@ export function generateReportHtml(
     ...(entry.reason ? { reason: redactSensitiveString(entry.reason) } : {}),
   }));
   const correlation = buildCorrelationGraph(data);
+  const privacy = buildPrivacyReceipt(data, coverage);
   const summary = {
     session: data.session,
     bundleCitation: buildBundleCitation(bundleId, coverage.schemaVersion),
     coverage,
-    privacy: {
-      redactionEnabled,
-      audit: buildRedactionAudit(data),
-    },
+    privacy,
     navigation: reportNavigation,
     console: reportConsole,
     network: reportNetwork,
@@ -159,6 +157,9 @@ summaryHtml+='<div class="stat-grid">';
 for(const [key,value] of Object.entries(c.totals)) summaryHtml+='<div class="stat"><strong>'+esc(value)+'</strong><br><span class="muted">'+esc(key)+'</span></div>';
 summaryHtml+='</div><p><button type="button" class="action-button" id="copy-citation">Copy citation</button><span class="muted citation-status" id="citation-status" aria-live="polite"></span></p>';
 summaryHtml+='<p class="muted"><strong>Redaction:</strong> '+(DATA.privacy.redactionEnabled?'enabled':'disabled — treat this export as sensitive')+' · '+esc(DATA.privacy.audit.redactedValues)+' value(s) replaced across '+esc(DATA.privacy.audit.redactedRecords)+' record(s)</p>';
+summaryHtml+='<h3>Privacy receipt</h3>'+table(['Field','Captured','Excluded','Redacted','Truncated','Dropped','Unavailable'],Object.entries(DATA.privacy.fields||{}).map(([key,value])=>[esc(key),esc(value.captured),esc(value.excluded),esc(value.redacted),esc(value.truncated),esc(value.dropped),esc(value.unavailable)]));
+summaryHtml+='<p class="muted"><strong>Export destination:</strong> '+esc(DATA.privacy.exportDestination||'local-device')+' · <strong>Policy epochs:</strong> '+esc(DATA.privacy.policyEpochs?.length||0)+'</p>';
+if((DATA.privacy.warnings||[]).length) summaryHtml+='<ul>'+DATA.privacy.warnings.map(warning=>'<li>'+esc(warning)+'</li>').join('')+'</ul>';
 document.getElementById('summary').innerHTML=summaryHtml;
 
 let coverageHtml='<h2>Coverage &amp; provenance</h2><p class="muted">Generated '+formatDate(c.generatedAt)+' · schema v'+esc(c.schemaVersion)+'</p>';
@@ -182,6 +183,10 @@ coverageHtml+='<h3>Capture policy</h3>'+table(['Setting','Value'],[
   ['Request/response bodies',c.policy?.captureBodies?'enabled':'disabled'],
   ['Console capture',c.policy?.captureConsole?'enabled':'disabled'],
   ['Allowed origins',c.policy?.allowedOrigins?.length?c.policy.allowedOrigins.join(', '):'page and dependencies'],
+  ['Target tabs',c.policy?.targetTabIds?.length?c.policy.targetTabIds.join(', '):'active tab'],
+  ['Frame IDs',c.policy?.frameIds?.length?c.policy.frameIds.join(', '):'all frames'],
+  ['Duration',c.policy?.durationMs?String(c.policy.durationMs)+' ms':'unlimited'],
+  ['Field consent',c.policy?.fields?Object.entries(c.policy.fields).filter(([,enabled])=>enabled).map(([field])=>field).join(', ')||'none':'unknown'],
 ]);
 const pauses=c.capture?.pauseIntervals||[];
 coverageHtml+='<h3>Pause intervals</h3>'+(pauses.length?table(['Started','Ended','Duration'],pauses.map(interval=>[

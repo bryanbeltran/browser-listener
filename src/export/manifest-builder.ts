@@ -14,8 +14,7 @@ import {
 import { emptyTruncation } from "../persistence/limits.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { buildCoverageReport } from "./coverage.js";
-import { REDACTION_RULE_SET_VERSION } from "../redaction/engine.js";
-import { buildRedactionAudit } from "../redaction/audit.js";
+import { buildPrivacyReceipt } from "./privacy-receipt.js";
 
 export const REQUIRED_EXPORT_FILES = [
   "report.html",
@@ -63,6 +62,7 @@ export function buildExportManifest(
     profile,
     budgets: normalizeCaptureBudgets(data.session?.options?.budgets),
   };
+  const baseWarnings = privacyWarnings(data, coverage);
   return {
     schemaVersion: EXPORT_MANIFEST_SCHEMA_VERSION,
     format: "browser-listener",
@@ -70,20 +70,7 @@ export function buildExportManifest(
     extensionVersion,
     sessionId: data.session?.id ?? "none",
     exportedAt,
-    privacy: {
-      schemaVersion: 2,
-      redactionRuleSetVersion: REDACTION_RULE_SET_VERSION,
-      audit: buildRedactionAudit(data),
-      captureBodies: options.captureBodies,
-      captureConsole: options.captureConsole,
-      scope: (data.session?.targets?.length ?? 1) > 1 ? "selected-tabs" : "active-tab",
-      localOnly: true,
-      remoteUpload: false,
-      redactionEnabled: data.session?.options?.redactionEnabled !== false,
-      policyEpochs: coverage.policy.epochs,
-      states: coverage.states,
-      warnings: privacyWarnings(data, coverage),
-    },
+    privacy: buildPrivacyReceipt(data, coverage, baseWarnings),
     options,
     files,
     ...(provenance ? { provenance } : {}),

@@ -15,6 +15,7 @@ export function popupStateFromSessionData(data: SessionData): PopupStateResponse
         navigation: data.navigation.length,
         console: data.console.length,
         markers: data.markers?.length ?? 0,
+        screenshots: data.screenshots?.length ?? 0,
       }),
     ),
     redactionEnabled: data.session?.options?.redactionEnabled !== false,

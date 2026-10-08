@@ -11,11 +11,13 @@ import { sha256Hex } from "./checksum.js";
 import { strToU8 } from "fflate";
 import { REDACTION_RULE_SET_VERSION } from "../redaction/engine.js";
 import { base64ToUint8 } from "../shared/bytes.js";
+import { sanitizeSessionDataForFields } from "../shared/field-policy.js";
 
 /** Redact export data again at the boundary. */
 export async function processSessionForExport(data: SessionData): Promise<SessionData> {
-  if (data.session?.options?.redactionEnabled === false) return data;
-  const redacted = redactDeep(data);
+  const fieldSafe = sanitizeSessionDataForFields(data);
+  if (fieldSafe.session?.options?.redactionEnabled === false) return fieldSafe;
+  const redacted = redactDeep(fieldSafe);
   return {
     ...redacted,
     navigation: redacted.navigation.map((entry) => ({
@@ -35,7 +37,7 @@ export async function processSessionForExport(data: SessionData): Promise<Sessio
     // Screenshot data is opaque PNG bytes encoded as base64; redacting it would
     // make the visual artifact unreadable. Its inclusion is called out in the
     // manifest privacy warnings instead.
-    screenshots: data.screenshots,
+    screenshots: fieldSafe.screenshots,
   };
 }
 

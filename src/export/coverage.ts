@@ -4,6 +4,10 @@ import {
   DEFAULT_CAPTURE_OPTIONS,
   inferCaptureProfile,
   normalizeCaptureBudgets,
+  normalizeCaptureDuration,
+  normalizeCaptureFields,
+  normalizeFrameIds,
+  normalizeTargetTabIds,
   policyEpochFromOptions,
 } from "../shared/types.js";
 import type {
@@ -15,9 +19,11 @@ import type {
   CoverageStateSummary,
   NetworkEntry,
   SessionData,
+  ScreenshotEvidence,
 } from "../shared/types.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { buildCapabilityMatrix } from "../capture/capabilities.js";
+import { EXCLUDED_FIELD } from "../shared/field-policy.js";
 
 export const COVERAGE_REPORT_SCHEMA_VERSION = 4 as const;
 
@@ -71,11 +77,19 @@ function summarizeStates(data: SessionData, captureBodies: boolean): CoverageSta
     navigation: stateCounts(data.navigation.length, truncation?.navigation ?? 0),
     console: stateCounts(data.console.length, truncation?.console ?? 0),
     markers: stateCounts(data.markers?.length ?? 0, truncation?.markers ?? 0),
+    screenshots: screenshotStates(data.screenshots ?? [], truncation?.screenshots ?? 0),
     bodies: {
       request: bodyStates(data.network, "request", captureBodies),
       response: bodyStates(data.network, "response", captureBodies),
     },
   };
+}
+
+function screenshotStates(entries: ScreenshotEvidence[], dropped: number): CoverageStateCounts {
+  const counts = emptyStates();
+  for (const entry of entries) counts[entry.state] += 1;
+  counts.dropped += dropped;
+  return counts;
 }
 
 function bodySkipReasons(network: NetworkEntry[]): Partial<Record<BodySkipReason, number>> {
@@ -97,7 +111,7 @@ function metric(total: number, present: number): CoverageMetric {
 }
 
 function hasValue(value: unknown): boolean {
-  return typeof value === "string" ? value.trim().length > 0 : value != null;
+  return typeof value === "string" ? value.trim().length > 0 && value !== EXCLUDED_FIELD : value != null;
 }
 
 export function buildCoverageReport(data: SessionData, generatedAt = Date.now()): CoverageReport {
@@ -125,6 +139,12 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       ? profileOptions.captureConsole
       : data.session?.options?.captureConsole ?? profileOptions.captureConsole,
     budgets: normalizeCaptureBudgets(data.session?.options?.budgets),
+    fields: normalizeCaptureFields(data.session?.options?.fields),
+    frameIds: normalizeFrameIds(data.session?.options?.frameIds),
+    targetTabIds: normalizeTargetTabIds(data.session?.options?.targetTabIds),
+    ...(normalizeCaptureDuration(data.session?.options?.durationMs) == null
+      ? {}
+      : { durationMs: normalizeCaptureDuration(data.session?.options?.durationMs) }),
   };
   const epochs = data.session?.policyEpochs?.length
     ? data.session.policyEpochs
@@ -141,7 +161,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
           truncation.console > 0 ||
           (truncation.markers ?? 0) > 0 ||
           (truncation.contextSnapshots ?? 0) > 0 ||
-          (truncation.performanceSignals ?? 0) > 0)) ||
+          (truncation.performanceSignals ?? 0) > 0 ||
+          (truncation.screenshots ?? 0) > 0)) ||
       (health?.persistenceErrors.length ?? 0) > 0 ||
       (health?.fairBudgetEvictions ?? 0) > 0,
   );
@@ -179,6 +200,10 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
         : data.session?.options?.captureConsole ?? profileOptions.captureConsole,
       allowedOrigins: data.session?.options?.allowedOrigins ?? [],
       budgets: options.budgets,
+      fields: options.fields,
+      frameIds: options.frameIds,
+      targetTabIds: options.targetTabIds,
+      ...(options.durationMs == null ? {} : { durationMs: options.durationMs }),
       epochs,
     },
     totals: {
@@ -227,6 +252,7 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       markersTruncated: health?.truncation.markers ?? 0,
       contextSnapshotsTruncated: health?.truncation.contextSnapshots ?? 0,
       performanceSignalsTruncated: health?.truncation.performanceSignals ?? 0,
+      screenshotsTruncated: health?.truncation.screenshots ?? 0,
       filteredNetworkRequests: health?.filteredNetworkRequests ?? 0,
       fairBudgetEvictions: health?.fairBudgetEvictions ?? 0,
       bodySkipReasons: bodySkipReasons(network),

@@ -96,6 +96,7 @@ interface HarEntry {
     requestTransferSize?: number;
     responseTransferSize?: number;
     oneRequestCapture?: boolean;
+    policyEpochId?: string;
     timing?: NetworkEntry["timing"];
   };
 }
@@ -222,6 +223,7 @@ function harEntry(entry: NetworkEntry): HarEntry {
       requestTransferSize: entry.requestTransferSize,
       responseTransferSize: entry.responseTransferSize,
       oneRequestCapture: entry.oneRequestCapture,
+      policyEpochId: entry.policyEpochId,
       timing: entry.timing,
     },
   };

@@ -1,6 +1,7 @@
 import { appendScreenshot, recordHealthGap } from "../persistence/store.js";
 import { getActiveSession } from "./session-manager.js";
 import type { ScreenshotEvidence } from "../shared/types.js";
+import { normalizeCaptureFields } from "../shared/types.js";
 
 function decodedBase64Bytes(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
@@ -18,6 +19,21 @@ export async function captureScreenshot(tabId?: number): Promise<ScreenshotEvide
   if (!session || targetTabId == null || session.paused || !selectedTarget(session, targetTabId)) return null;
 
   const timestamp = Date.now();
+  const policyEpochId = session.policyEpochs?.at(-1)?.id;
+  if (!normalizeCaptureFields(session.options.fields).visualEvidence) {
+    const evidence: ScreenshotEvidence = {
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      timestamp,
+      tabId: targetTabId,
+      format: "png",
+      state: "excluded",
+      reason: "field-disabled",
+      policyEpochId,
+    };
+    await appendScreenshot(evidence);
+    return evidence;
+  }
   try {
     const result = await chrome.debugger.sendCommand(
       { tabId: targetTabId },
@@ -34,6 +50,7 @@ export async function captureScreenshot(tabId?: number): Promise<ScreenshotEvide
       state: "observed",
       data: result.data,
       byteLength: decodedBase64Bytes(result.data),
+      policyEpochId,
     };
     await appendScreenshot(evidence);
     return evidence;
@@ -47,6 +64,7 @@ export async function captureScreenshot(tabId?: number): Promise<ScreenshotEvide
       format: "png",
       state: "unavailable",
       reason,
+      policyEpochId,
     };
     await appendScreenshot(evidence);
     await recordHealthGap(`screenshot_capture_failed: ${reason}`);

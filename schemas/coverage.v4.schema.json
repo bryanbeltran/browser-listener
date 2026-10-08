@@ -18,7 +18,7 @@
     },
     "policy": {
       "type": "object",
-      "required": ["profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets", "epochs"],
+      "required": ["profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets", "fields", "frameIds", "targetTabIds", "epochs"],
       "properties": {
         "profile": { "enum": ["metadata", "network-console", "safe-bodies"] },
         "redactionEnabled": { "type": "boolean" },
@@ -33,6 +33,10 @@
             "perCategoryBytes": { "type": "integer", "minimum": 1 }
           }
         },
+        "fields": { "$ref": "#/$defs/fields" },
+        "frameIds": { "type": "array", "items": { "type": "string" } },
+        "targetTabIds": { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+        "durationMs": { "type": "integer", "minimum": 1 },
         "epochs": { "type": "array", "items": { "$ref": "#/$defs/policyEpoch" } }
       }
     },
@@ -44,6 +48,7 @@
       "required": ["partial", "gapReasons", "fairBudgetEvictions", "bodySkipReasons"],
       "properties": {
         "partial": { "type": "boolean" },
+        "screenshotsTruncated": { "type": "integer", "minimum": 0 },
         "gapReasons": { "type": "array", "items": { "type": "string" } },
         "fairBudgetEvictions": { "type": "integer", "minimum": 0 },
         "bodySkipReasons": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
@@ -65,12 +70,13 @@
     },
     "stateSummary": {
       "type": "object",
-      "required": ["network", "navigation", "console", "markers", "bodies"],
+      "required": ["network", "navigation", "console", "markers", "screenshots", "bodies"],
       "properties": {
         "network": { "$ref": "#/$defs/stateCounts" },
         "navigation": { "$ref": "#/$defs/stateCounts" },
         "console": { "$ref": "#/$defs/stateCounts" },
         "markers": { "$ref": "#/$defs/stateCounts" },
+        "screenshots": { "$ref": "#/$defs/stateCounts" },
         "bodies": {
           "type": "object",
           "required": ["request", "response"],
@@ -83,7 +89,7 @@
     },
     "policyEpoch": {
       "type": "object",
-      "required": ["id", "startedAt", "profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets"],
+      "required": ["id", "startedAt", "profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets", "fields", "frameIds", "targetTabIds"],
       "properties": {
         "id": { "type": "string" },
         "startedAt": { "type": "integer", "minimum": 0 },
@@ -101,6 +107,23 @@
             "perCategoryBytes": { "type": "integer", "minimum": 1 }
           }
         }
+        ,"fields": { "$ref": "#/$defs/fields" }
+        ,"frameIds": { "type": "array", "items": { "type": "string" } }
+        ,"targetTabIds": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+        ,"durationMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "fields": {
+      "type": "object",
+      "required": ["urls", "headers", "requestBodies", "responseBodies", "consoleArguments", "navigationTitles", "visualEvidence"],
+      "properties": {
+        "urls": { "type": "boolean" },
+        "headers": { "type": "boolean" },
+        "requestBodies": { "type": "boolean" },
+        "responseBodies": { "type": "boolean" },
+        "consoleArguments": { "type": "boolean" },
+        "navigationTitles": { "type": "boolean" },
+        "visualEvidence": { "type": "boolean" }
       }
     }
   }

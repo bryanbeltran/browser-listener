@@ -10,6 +10,8 @@ import { getActiveSession } from "./session-manager.js";
 import type { CaptureSession, ConsoleEntry, NetworkEntry } from "../shared/types.js";
 import { isOriginAllowed } from "../shared/urls.js";
 import { matchesCaptureMime, matchesCaptureUrl, matchesOneRequest } from "../shared/capture-filters.js";
+import { normalizeCaptureFields } from "../shared/types.js";
+import { EXCLUDED_FIELD, fieldsForSession, policyForSession } from "../shared/field-policy.js";
 
 const CDP_VERSION = "1.3";
 /** CDP request IDs are only unique within one debugger target. */
@@ -206,6 +208,10 @@ function completedTiming(entry: NetworkEntry, end: number): NetworkEntry["timing
   };
 }
 
+function frameAllowed(policy: ReturnType<typeof policyForSession>, frameId: string | undefined): boolean {
+  return !policy?.frameIds.length || Boolean(frameId && policy.frameIds.includes(frameId));
+}
+
 function remoteObjectText(value: unknown): string {
   const object = value as
     | { value?: unknown; unserializableValue?: string; description?: string; type?: string }
@@ -239,6 +245,8 @@ function consoleEntry(
   level: string,
   text: string,
   fields: Record<string, unknown> = {},
+  includeArgs = true,
+  includeUrls = true,
 ): ConsoleEntry {
   return {
     id: crypto.randomUUID(),
@@ -249,11 +257,11 @@ function consoleEntry(
     text: text || "(empty console entry)",
     tabId: tabId >= 0 ? tabId : undefined,
     source: typeof fields.source === "string" ? fields.source : undefined,
-    url: typeof fields.url === "string" ? fields.url : undefined,
+    url: includeUrls && typeof fields.url === "string" ? fields.url : undefined,
     lineNumber: typeof fields.lineNumber === "number" ? fields.lineNumber : undefined,
     columnNumber: typeof fields.columnNumber === "number" ? fields.columnNumber : undefined,
-    stackTrace: stackFramesText(fields.stackTrace),
-    args: Array.isArray(fields.args)
+    stackTrace: includeUrls ? stackFramesText(fields.stackTrace) : undefined,
+    args: includeArgs && Array.isArray(fields.args)
       ? fields.args.slice(0, 8).map((arg) => remoteObjectText(arg))
       : undefined,
   };
@@ -264,16 +272,18 @@ async function captureConsoleEvent(
   tabId: number,
   method: string,
   params: Record<string, unknown>,
+  session: CaptureSession,
 ): Promise<void> {
+  const fields = normalizeCaptureFields(session.options.fields);
   if (method === "Runtime.consoleAPICalled") {
     const args = Array.isArray(params.args) ? params.args : [];
     await appendConsole(
-      consoleEntry(sessionId, tabId, String(params.type ?? "log"), args.map(remoteObjectText).join(" "), {
+      consoleEntry(sessionId, tabId, String(params.type ?? "log"), fields.consoleArguments ? args.map(remoteObjectText).join(" ") : EXCLUDED_FIELD, {
         method,
         timestamp: params.timestamp,
-        args,
+        ...(fields.consoleArguments ? { args } : {}),
         stackTrace: params.stackTrace,
-      }),
+      }, fields.consoleArguments, fields.urls),
     );
   }
 
@@ -288,7 +298,7 @@ async function captureConsoleEvent(
         lineNumber: details.lineNumber,
         columnNumber: details.columnNumber,
         stackTrace: details.stackTrace ?? exception?.stackTrace,
-      }),
+      }, false, fields.urls),
     );
   }
 
@@ -302,7 +312,7 @@ async function captureConsoleEvent(
         url: entry.url,
         lineNumber: entry.lineNumber,
         stackTrace: entry.stackTrace,
-      }),
+      }, false, fields.urls),
     );
   }
 }
@@ -320,9 +330,12 @@ async function onDebuggerEvent(
   if (attachedTabIds.size > 0 && !attachedTabIds.has(tabId)) return;
   if (session.paused) return;
   const p = (params ?? {}) as Record<string, unknown>;
+  const currentPolicy = policyForSession(session, session.policyEpochs?.at(-1)?.id);
+  const eventFrameId = p.frameId != null ? String(p.frameId) : undefined;
 
   if (session.options.captureConsole && (method.startsWith("Runtime.") || method === "Log.entryAdded")) {
-    await captureConsoleEvent(session.id, tabId, method, p);
+    if (!frameAllowed(currentPolicy, eventFrameId)) return;
+    await captureConsoleEvent(session.id, tabId, method, p, session);
     return;
   }
 
@@ -331,7 +344,15 @@ async function onDebuggerEvent(
       | { url?: string; method?: string; headers?: Record<string, string>; documentURL?: string }
       | undefined;
     const url = request?.url;
-    const inCaptureScope = isOriginAllowed(url, session.options.allowedOrigins) && matchesCaptureUrl(url, session.options.filters);
+    const policy = currentPolicy;
+    const fields = fieldsForSession(session, policy?.id);
+    const frameId = eventFrameId;
+    if (!frameAllowed(policy, frameId)) return;
+    const inCaptureScope = Boolean(
+      policy &&
+        isOriginAllowed(url, policy.allowedOrigins.length ? policy.allowedOrigins : undefined) &&
+        matchesCaptureUrl(url, policy.filters),
+    );
     const oneShot = Boolean(
       inCaptureScope && session.oneRequestCapture && matchesOneRequest(url, session.oneRequestCapture.urlIncludes),
     );
@@ -374,13 +395,20 @@ async function onDebuggerEvent(
       method: request?.method ?? "GET",
       type: String(p.type ?? "other"),
       oneRequestCapture: oneShot || undefined,
+      policyEpochId: session.policyEpochs?.at(-1)?.id,
       tabId,
-      frameId: p.frameId != null ? String(p.frameId) : undefined,
-      documentUrl: typeof p.documentURL === "string" ? p.documentURL : request?.documentURL,
+      frameId,
+      documentUrl: fields.urls
+        ? typeof p.documentURL === "string" ? p.documentURL : request?.documentURL
+        : undefined,
       redirectFromId: previous?.id,
-      initiator,
+      initiator: fields.urls
+        ? initiator
+        : initiator
+          ? { ...initiator, url: undefined }
+          : undefined,
       isPreflight: String(p.type ?? "").toLowerCase() === "preflight",
-      requestHeaders: request?.headers,
+      requestHeaders: fields.headers ? request?.headers : undefined,
       timing: { start: requestTimestamp },
     });
   }
@@ -402,9 +430,12 @@ async function onDebuggerEvent(
     const prior = pendingCdp.get(key);
     const base = prior?.sessionId === session.id ? prior : { requestId, sessionId: session.id, tabId };
     const responseTimestamp = Date.now();
+    const policy = policyForSession(session, prior?.policyEpochId ?? session.policyEpochs?.at(-1)?.id);
+    const fields = fieldsForSession(session, policy?.id);
+    if (!frameAllowed(policy, (base as NetworkEntry).frameId)) return;
     const contentType = response?.mimeType ?? Object.entries(response?.headers ?? {}).find(([header]) => header.toLowerCase() === "content-type")?.[1];
     const oneShot = oneShotRequestKeys.has(key) || prior?.oneRequestCapture === true;
-    if (!oneShot && !matchesCaptureMime(contentType, session.options.filters)) {
+    if (!oneShot && !matchesCaptureMime(contentType, policy?.filters)) {
       pendingCdp.delete(key);
       await patchSession((current) =>
         current
@@ -430,19 +461,26 @@ async function onDebuggerEvent(
       type: (base as NetworkEntry).type ?? "other",
       statusCode: response?.status,
       statusLine: response?.statusText,
-      responseHeaders: response?.headers,
+      responseHeaders: fields.headers ? response?.headers : undefined,
       contentType,
       tabId,
+      policyEpochId: prior?.policyEpochId ?? session.policyEpochs?.at(-1)?.id,
       fromCache: response?.fromDiskCache,
       fromServiceWorker: response?.fromServiceWorker,
       connectionReused: response?.connectionReused,
-      ...(!session.options.captureBodies && !oneShot
+      ...(!policy?.captureBodies && !oneShot
         ? {
             requestBodyState: "excluded" as const,
             requestBodySkipReason: "capture-disabled" as const,
             responseBodyState: "excluded" as const,
             responseBodySkipReason: "capture-disabled" as const,
           }
+        : {}),
+      ...(!fields.requestBodies
+        ? { requestBodyState: "excluded" as const, requestBodySkipReason: "field-disabled" as const }
+        : {}),
+      ...(!fields.responseBodies
+        ? { responseBodyState: "excluded" as const, responseBodySkipReason: "field-disabled" as const }
         : {}),
     };
     entry.timing = completedTiming(entry, responseTimestamp);
@@ -454,6 +492,8 @@ async function onDebuggerEvent(
     const requestId = String(p.requestId ?? "");
     const key = pendingKey(tabId, requestId);
     const pending = pendingCdp.get(key);
+    const pendingPolicy = policyForSession(session, (pending as NetworkEntry | undefined)?.policyEpochId);
+    if (!frameAllowed(pendingPolicy, (pending as NetworkEntry | undefined)?.frameId ?? eventFrameId)) return;
     if (pending?.sessionId === session.id) {
       const failed: NetworkEntry = {
         ...(pending as NetworkEntry),
@@ -470,6 +510,8 @@ async function onDebuggerEvent(
     const requestId = String(p.requestId ?? "");
     const key = pendingKey(tabId, requestId);
     const pending = pendingCdp.get(key);
+    const pendingPolicy = policyForSession(session, (pending as NetworkEntry | undefined)?.policyEpochId);
+    if (!frameAllowed(pendingPolicy, (pending as NetworkEntry | undefined)?.frameId ?? eventFrameId)) return;
     if (!pending?.url) return;
     const base = pending as NetworkEntry;
     const job = (async () => {
@@ -654,7 +696,8 @@ export async function flushPendingBodyCaptures(): Promise<void> {
   const sweep = async (key: string, base: NetworkEntry): Promise<void> => {
     const tabId = base.tabId;
     if (tabId == null || !attachedTabIds.has(tabId) || !base.url || base.bodyCaptured || !base.statusCode) return;
-    if (!session.options.captureBodies && !base.oneRequestCapture) return;
+    const policy = policyForSession(session, base.policyEpochId);
+    if (!policy?.captureBodies && !base.oneRequestCapture) return;
     const bodies = await captureBodiesForRequest(tabId, base.requestId, base, base.oneRequestCapture === true);
     if (Object.keys(bodies).length === 0) return;
     const updated: NetworkEntry = { ...base, ...bodies };

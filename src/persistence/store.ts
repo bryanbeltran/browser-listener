@@ -51,10 +51,24 @@ import {
   captureProfileDefaults,
   inferCaptureProfile,
   normalizeCaptureBudgets,
+  normalizeCaptureDuration,
+  normalizeCaptureFields,
   normalizeCaptureFilters,
+  normalizeFrameIds,
+  normalizeTargetTabIds,
   normalizeCaptureProfile,
   policyEpochFromOptions,
 } from "../shared/types.js";
+import {
+  fieldsForSession,
+  sanitizeContextSnapshot,
+  sanitizeConsoleEntry,
+  sanitizeMarkerEntry,
+  sanitizeNavigationEntry,
+  sanitizeNetworkEntry,
+  sanitizeScreenshotEntry,
+  sanitizeSessionDataForFields,
+} from "../shared/field-policy.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import { normalizeOriginAllowlist } from "../shared/urls.js";
 import { buildCapabilityMatrix } from "../capture/capabilities.js";
@@ -155,6 +169,11 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
     redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
     budgets: normalizeCaptureBudgets(session.options?.budgets),
     filters: normalizeCaptureFilters(session.options?.filters),
+    fields: normalizeCaptureFields(session.options?.fields),
+    frameIds: normalizeFrameIds(session.options?.frameIds),
+    ...(normalizeCaptureDuration(session.options?.durationMs) == null
+      ? {}
+      : { durationMs: normalizeCaptureDuration(session.options?.durationMs) }),
     ...(allowedOrigins == null ? {} : { allowedOrigins }),
   };
   const policyEpochs = session.policyEpochs?.length
@@ -163,14 +182,33 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
         allowedOrigins: [...(epoch.allowedOrigins ?? [])],
         budgets: normalizeCaptureBudgets(epoch.budgets),
         filters: normalizeCaptureFilters(epoch.filters),
+        fields: normalizeCaptureFields(epoch.fields),
+        frameIds: normalizeFrameIds(epoch.frameIds),
+        targetTabIds: normalizeTargetTabIds(epoch.targetTabIds),
+        ...(normalizeCaptureDuration(epoch.durationMs) == null
+          ? {}
+          : { durationMs: normalizeCaptureDuration(epoch.durationMs) }),
       }))
     : [policyEpochFromOptions(options, `legacy-${session.id}`, session.startedAt, session.stoppedAt)];
+  if (policyEpochs.length === 1 && policyEpochs[0]?.id === `legacy-${session.id}`) {
+    policyEpochs[0] = policyEpochFromOptions(
+      options,
+      policyEpochs[0].id,
+      policyEpochs[0].startedAt,
+      policyEpochs[0].endedAt,
+    );
+  }
   return {
     ...session,
     options,
     health: normalizeHealth(session),
     policyEpochs,
     capabilities: session.capabilities ?? buildCapabilityMatrix(),
+    ...(session.expiresAt != null
+      ? { expiresAt: session.expiresAt }
+      : normalizeCaptureDuration(options.durationMs) == null
+        ? {}
+        : { expiresAt: session.startedAt + normalizeCaptureDuration(options.durationMs)! }),
   };
 }
 
@@ -387,9 +425,10 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
   if (isLegacySessionData(persisted) && session?.id) {
     const redact = session.options.redactionEnabled !== false;
     if (persisted.network.length > 0) {
-      const network = redact
-        ? persisted.network.map((entry) => redactDeep(entry))
-        : persisted.network;
+      const network = persisted.network.map((entry) => {
+        const fieldSafe = sanitizeNetworkEntry(entry, fieldsForSession(session, entry.policyEpochId));
+        return redact ? redactDeep(fieldSafe) : fieldSafe;
+      });
       const result = await putNetworkEntries(session.id, network, totalNetworkBytes(network));
       if (result.truncated > 0 && session) {
         session = bumpTruncation(session, { network: result.truncated });
@@ -402,17 +441,28 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
         legacyEvidence.console.length ||
         legacyEvidence.markers.length ||
         legacyEvidence.contextSnapshots.length ||
-        legacyEvidence.performanceSignals.length,
+        legacyEvidence.performanceSignals.length ||
+        legacyEvidence.screenshots.length,
     );
     if (hasLegacyEvidence) {
       const existingEvidence = await readEvidence(session.id);
       await writeEvidence(session.id, {
-        navigation: existingEvidence.navigation.length ? existingEvidence.navigation : legacyEvidence.navigation,
-        console: existingEvidence.console.length ? existingEvidence.console : legacyEvidence.console,
-        markers: existingEvidence.markers.length ? existingEvidence.markers : legacyEvidence.markers,
-        contextSnapshots: existingEvidence.contextSnapshots.length ? existingEvidence.contextSnapshots : legacyEvidence.contextSnapshots,
+        navigation: existingEvidence.navigation.length
+          ? existingEvidence.navigation
+          : legacyEvidence.navigation.map((entry) => sanitizeNavigationEntry(entry, fieldsForSession(session, entry.policyEpochId))),
+        console: existingEvidence.console.length
+          ? existingEvidence.console
+          : legacyEvidence.console.map((entry) => sanitizeConsoleEntry(entry, fieldsForSession(session, entry.policyEpochId))),
+        markers: existingEvidence.markers.length
+          ? existingEvidence.markers
+          : legacyEvidence.markers.map((entry) => sanitizeMarkerEntry(entry, fieldsForSession(session, entry.policyEpochId))),
+        contextSnapshots: existingEvidence.contextSnapshots.length
+          ? existingEvidence.contextSnapshots
+          : legacyEvidence.contextSnapshots.map((entry) => sanitizeContextSnapshot(entry, fieldsForSession(session, entry.policyEpochId))),
         performanceSignals: existingEvidence.performanceSignals.length ? existingEvidence.performanceSignals : legacyEvidence.performanceSignals,
-        screenshots: existingEvidence.screenshots.length ? existingEvidence.screenshots : legacyEvidence.screenshots,
+        screenshots: existingEvidence.screenshots.length
+          ? existingEvidence.screenshots
+          : legacyEvidence.screenshots.map((entry) => sanitizeScreenshotEntry(entry, fieldsForSession(session, entry.policyEpochId))),
       }, redact);
     }
     await writePersistedMeta({ session });
@@ -495,6 +545,7 @@ async function readCounts(session: CaptureSession | null): Promise<PopupCounts> 
     navigation: evidence.navigation.length,
     console: evidence.console.length,
     markers: evidence.markers.length,
+    screenshots: evidence.screenshots.length,
   };
 }
 
@@ -615,7 +666,7 @@ export async function readSessionData(): Promise<SessionData> {
   const meta = await readPersistedMeta();
   const network = await loadNetworkForSession(meta.session);
   const evidence = meta.session?.id ? await readEvidence(meta.session.id) : normalizeEvidence(null);
-  return normalizeSessionData({
+  return sanitizeSessionDataForFields(normalizeSessionData({
     session: meta.session,
     network,
     navigation: evidence.navigation,
@@ -624,7 +675,7 @@ export async function readSessionData(): Promise<SessionData> {
     contextSnapshots: evidence.contextSnapshots,
     performanceSignals: evidence.performanceSignals,
     screenshots: evidence.screenshots,
-  });
+  }));
 }
 
 export async function readSessionHistory(): Promise<SessionHistoryEntry[]> {
@@ -752,7 +803,7 @@ export async function resumePendingDeletions(): Promise<void> {
 }
 
 export async function writeSessionData(data: SessionData): Promise<SessionData> {
-  const normalized = normalizeSessionData(data);
+  const normalized = sanitizeSessionDataForFields(normalizeSessionData(data));
   let session = normalized.session;
   const redact = shouldRedact(session);
   let truncated = 0;
@@ -839,7 +890,8 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
       network: networkCount,
       navigation: navigation.length,
       console: consoleEntries.length,
-      markers: markers.length,
+    markers: markers.length,
+    screenshots: screenshots.length,
     });
   } else {
     await flushPopupSnapshot();
@@ -866,6 +918,7 @@ export async function syncPopupStateSnapshot(): Promise<void> {
     navigation: data.navigation.length,
     console: data.console.length,
     markers: data.markers?.length ?? 0,
+    screenshots: data.screenshots?.length ?? 0,
   });
 }
 
@@ -1031,7 +1084,8 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   const meta = await readPersistedMeta();
   if (!meta.session?.active) return;
 
-  const stored = shouldRedact(meta.session) ? redactDeep(entry) : entry;
+  const fieldSafe = sanitizeNetworkEntry(entry, fieldsForSession(meta.session, entry.policyEpochId));
+  const stored = shouldRedact(meta.session) ? redactDeep(fieldSafe) : fieldSafe;
   const stats = await loadCaptureStats(meta.session.id);
   const result = await idbUpsertNetworkEntry(
     meta.session.id,
@@ -1063,6 +1117,7 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
     navigation: evidence.navigation.length,
     console: evidence.console.length,
     markers: evidence.markers.length,
+    screenshots: evidence.screenshots.length,
   });
 }
 
@@ -1076,7 +1131,19 @@ async function appendBoundedEvidenceNow(
   const evidence = await readEvidence(entry.sessionId);
   const truncation = emptyTruncation();
   const redact = shouldRedact(meta.session);
-  const safeEntry = (kind === "screenshots" ? entry : redact ? redactDeep(entry) : entry) as
+  const fields = fieldsForSession(meta.session, entry.policyEpochId);
+  const fieldSafe = kind === "navigation"
+    ? sanitizeNavigationEntry(entry as NavigationEntry, fields)
+    : kind === "console"
+      ? sanitizeConsoleEntry(entry as ConsoleEntry, fields)
+      : kind === "markers"
+        ? sanitizeMarkerEntry(entry as MarkerEntry, fields)
+        : kind === "contextSnapshots"
+          ? sanitizeContextSnapshot(entry as BrowserContextSnapshot, fields)
+          : kind === "screenshots"
+            ? sanitizeScreenshotEntry(entry as ScreenshotEvidence, fields)
+            : entry;
+  const safeEntry = (kind === "screenshots" ? fieldSafe : redact ? redactDeep(fieldSafe) : fieldSafe) as
     | NavigationEntry
     | ConsoleEntry
     | MarkerEntry
@@ -1142,6 +1209,7 @@ async function appendBoundedEvidenceNow(
       navigation: evidence.navigation.length,
       console: evidence.console.length,
       markers: evidence.markers.length,
+      screenshots: evidence.screenshots.length,
     });
   }
 }

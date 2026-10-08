@@ -3,6 +3,8 @@ import { BODY_CAPTURE_LIMITS } from "../persistence/limits.js";
 import { redactBodyText } from "../redaction/engine.js";
 import { getActiveSession } from "./session-manager.js";
 import type { BodyEncoding, BodySkipReason, CoverageState, NetworkEntry } from "../shared/types.js";
+import { normalizeCaptureFields } from "../shared/types.js";
+import { policyForSession } from "../shared/field-policy.js";
 
 const SAFE_EXACT_MIME_TYPES = new Set([
   "application/json",
@@ -112,8 +114,10 @@ export async function captureBodiesForRequest(
   force = false,
 ): Promise<Partial<NetworkEntry>> {
   const session = await getActiveSession();
-  if (!session || (!session.options.captureBodies && !force)) return {};
+  const policy = session ? policyForSession(session, entry.policyEpochId) : undefined;
+  if (!session || (!policy?.captureBodies && !force)) return {};
   const redact = session.options.redactionEnabled !== false;
+  const fields = normalizeCaptureFields(policy?.fields ?? session.options.fields);
 
   const patch: Partial<NetworkEntry> = {};
   let totalBytes = 0;
@@ -139,7 +143,9 @@ export async function captureBodiesForRequest(
     prepared.truncated ? "truncated" : prepared.redacted ? "redacted" : "observed";
 
   const requestType = headerValue(entry.requestHeaders);
-  if (!requestType) {
+  if (!fields.requestBodies) {
+    setDecision("request", "excluded", "field-disabled");
+  } else if (!requestType) {
     setDecision(
       "request",
       entry.method === "GET" || entry.method === "HEAD" ? "unavailable" : "excluded",
@@ -172,7 +178,9 @@ export async function captureBodiesForRequest(
   }
 
   const responseType = entry.contentType ?? headerValue(entry.responseHeaders);
-  if (!responseType) {
+  if (!fields.responseBodies) {
+    setDecision("response", "excluded", "field-disabled");
+  } else if (!responseType) {
     setDecision("response", "excluded", "missing-mime-type");
   } else if (!shouldCaptureBody(responseType)) {
     setDecision("response", "excluded", "unsafe-mime-type");

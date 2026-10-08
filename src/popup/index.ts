@@ -6,7 +6,11 @@ import { hasTruncation } from "../persistence/limits.js";
 import { REDACTION_PREFERENCE_KEY } from "../persistence/preferences.js";
 import { REDACTION_CONFIG_KEY } from "../persistence/preferences.js";
 import type { PopupStateResponse } from "../shared/messages.js";
-import type { CaptureProfile, RedactionConfig } from "../shared/types.js";
+import {
+  DEFAULT_CAPTURE_FIELDS,
+  normalizeCaptureFields,
+} from "../shared/types.js";
+import type { CaptureField, CaptureFieldPolicy, CaptureProfile, RedactionConfig } from "../shared/types.js";
 import { isCaptureableUrl } from "../shared/urls.js";
 import { readPopupState } from "./popup-state.js";
 import { sendMessageWithTimeout } from "./messaging.js";
@@ -39,6 +43,15 @@ const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
 const filterUrlIncludesInput = el<HTMLInputElement>("filter-url-includes");
 const filterUrlExcludesInput = el<HTMLInputElement>("filter-url-excludes");
 const filterMimeTypesInput = el<HTMLInputElement>("filter-mime-types");
+const frameIdsInput = el<HTMLInputElement>("frame-ids");
+const captureDurationInput = el<HTMLInputElement>("capture-duration");
+const effectivePolicySummary = el("effective-policy-summary");
+const activeTargetTabsList = el("active-target-tabs-list");
+const activeScopeOriginsInput = el<HTMLInputElement>("active-scope-origins");
+const activeFrameIdsInput = el<HTMLInputElement>("active-frame-ids");
+const activeCaptureDurationInput = el<HTMLInputElement>("active-capture-duration");
+const btnUpdatePolicy = el<HTMLButtonElement>("btn-update-policy");
+const policyStatus = el("policy-status");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
 const redactionWarning = el("redaction-warning");
 const redactionKeyList = el<HTMLTextAreaElement>("redaction-key-list");
@@ -229,6 +242,64 @@ function parseFilterList(value: string | undefined): string[] {
   return parseKeyList(value);
 }
 
+const CAPTURE_FIELD_KEYS: CaptureField[] = [
+  "urls",
+  "headers",
+  "requestBodies",
+  "responseBodies",
+  "consoleArguments",
+  "navigationTitles",
+  "visualEvidence",
+];
+
+function fieldControlId(field: CaptureField, active = false): string {
+  const prefix = active ? "active-field-" : "field-";
+  return `${prefix}${field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
+}
+
+function readFieldPolicy(active = false): CaptureFieldPolicy {
+  return normalizeCaptureFields(Object.fromEntries(CAPTURE_FIELD_KEYS.map((field) => [
+    field,
+    el<HTMLInputElement>(fieldControlId(field, active))?.checked ?? DEFAULT_CAPTURE_FIELDS[field],
+  ])));
+}
+
+function writeFieldPolicy(fields: CaptureFieldPolicy | undefined, active = false): void {
+  const normalized = normalizeCaptureFields(fields);
+  for (const field of CAPTURE_FIELD_KEYS) {
+    const input = el<HTMLInputElement>(fieldControlId(field, active));
+    if (input) input.checked = normalized[field];
+  }
+}
+
+function parseFrameIdList(value: string | undefined): string[] {
+  return parseKeyList(value);
+}
+
+function parseDurationMs(value: string | undefined): number | undefined {
+  const minutes = Number(value);
+  if (!value?.trim() || !Number.isFinite(minutes) || minutes <= 0) return undefined;
+  return Math.floor(minutes * 60_000);
+}
+
+function formatDuration(expiresAt: number | undefined): string {
+  if (expiresAt == null) return "no deadline";
+  const remaining = Math.max(0, expiresAt - Date.now());
+  return remaining === 0 ? "deadline reached" : `${Math.ceil(remaining / 60_000)} min remaining`;
+}
+
+function updateEffectivePolicySummary(): void {
+  const fields = readFieldPolicy();
+  const disabled = CAPTURE_FIELD_KEYS.filter((field) => !fields[field]);
+  const tabs = selectedTargetTabIds();
+  const frames = parseFrameIdList(frameIdsInput?.value);
+  const duration = parseDurationMs(captureDurationInput?.value);
+  setText(
+    effectivePolicySummary,
+    `Effective policy: ${tabs.length || 1} tab(s) · ${frames.length ? `${frames.length} frame ID(s)` : "all frames"} · ${duration ? `${Math.round(duration / 60_000)} min` : "no duration limit"} · ${disabled.length ? `excluded: ${disabled.join(", ")}` : "all text fields enabled"}. Visual evidence is ${fields.visualEvidence ? "opt-in enabled" : "disabled by default"}.`,
+  );
+}
+
 function activeRedactionConfigElement(): boolean {
   const active = document.activeElement;
   return active === redactionKeyList || active === redactionUrlKeyList || active === redactionObjectKeyList || active === redactionRulesJson || active === scopeOriginsInput;
@@ -288,11 +359,76 @@ function renderTargetTabs(tabs: chrome.tabs.Tab[]): void {
   }
 }
 
+function selectedActiveTargetTabIds(): number[] {
+  if (!activeTargetTabsList) return [];
+  return Array.from(activeTargetTabsList.querySelectorAll<HTMLInputElement>("input[data-tab-id]"))
+    .filter((control) => control.checked)
+    .map((control) => Number(control.dataset.tabId))
+    .filter((tabId) => Number.isInteger(tabId) && tabId >= 0);
+}
+
+function renderActiveTargetTabs(tabs: chrome.tabs.Tab[], state: PopupStateResponse["session"]): void {
+  if (!activeTargetTabsList) return;
+  const current = new Set(state?.targetTabIds ?? []);
+  if (state?.targetTabIds == null && state) {
+    for (const tab of tabs) {
+      if (tab.id != null && tab.active) current.add(tab.id);
+    }
+  }
+  activeTargetTabsList.replaceChildren();
+  for (const tab of tabs.filter((candidate) => candidate.id != null)) {
+    const tabId = tab.id as number;
+    const option = document.createElement("label");
+    option.className = "target-tab-option";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.tabId = String(tabId);
+    input.checked = current.has(tabId) || tabId === state?.primaryTabId;
+    input.disabled = !isCaptureableUrl(tab.url) || tabId === state?.primaryTabId;
+    input.setAttribute("aria-label", tab.title || tab.url || `Tab ${tabId}`);
+    const text = document.createElement("span");
+    text.className = "target-tab-label";
+    text.textContent = tab.title || tab.url || `Tab ${tabId}`;
+    const url = document.createElement("span");
+    url.className = "target-tab-url";
+    url.textContent = isCaptureableUrl(tab.url) ? tab.url ?? "" : "Not an HTTP(S) page";
+    text.append(url);
+    option.append(input, text);
+    activeTargetTabsList.append(option);
+  }
+}
+
+function policyControlFocused(): boolean {
+  const active = document.activeElement;
+  return active === activeScopeOriginsInput || active === activeFrameIdsInput || active === activeCaptureDurationInput || Boolean(
+    active && active instanceof HTMLInputElement && active.id.startsWith("active-field-"),
+  );
+}
+
+function renderActivePolicy(session: PopupStateResponse["session"]): void {
+  if (!session || policyControlFocused()) return;
+  if (activeScopeOriginsInput) activeScopeOriginsInput.value = session.allowedOrigins?.join(", ") ?? "";
+  if (activeFrameIdsInput) activeFrameIdsInput.value = session.frameIds?.join(", ") ?? "";
+  if (activeCaptureDurationInput) {
+    activeCaptureDurationInput.value = session.durationMs == null ? "" : String(Math.max(1, Math.round(session.durationMs / 60_000)));
+  }
+  writeFieldPolicy(session.fields, true);
+}
+
 async function loadTargetTabs(): Promise<void> {
   try {
     renderTargetTabs(await chrome.tabs.query({ currentWindow: true }));
   } catch {
     setText(targetTabsList, "Could not list browser tabs.");
+  }
+}
+
+async function loadActiveTargetTabs(state: PopupStateResponse["session"]): Promise<void> {
+  if (!activeTargetTabsList) return;
+  try {
+    renderActiveTargetTabs(await chrome.tabs.query({ currentWindow: true }), state);
+  } catch {
+    setText(activeTargetTabsList, "Could not list browser tabs.");
   }
 }
 
@@ -323,6 +459,15 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   if (scopeOriginsInput && !activeRedactionConfigElement()) {
     scopeOriginsInput.value = state.session?.allowedOrigins?.join(", ") ?? scopeOriginsInput.value;
   }
+  if (state.session && !active) {
+    if (frameIdsInput && document.activeElement !== frameIdsInput) frameIdsInput.value = state.session.frameIds?.join(", ") ?? frameIdsInput.value;
+    if (captureDurationInput && document.activeElement !== captureDurationInput) {
+      captureDurationInput.value = state.session.durationMs == null ? captureDurationInput.value : String(Math.max(1, Math.round(state.session.durationMs / 60_000)));
+    }
+    writeFieldPolicy(state.session.fields);
+  }
+  renderActivePolicy(state.session);
+  updateEffectivePolicySummary();
   redactionWarning?.classList.toggle("hidden", state.redactionEnabled);
   renderRedactionConfig(state.redactionConfig, active || canExport);
 
@@ -332,7 +477,9 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
     const trunc = truncationHint(state.session);
     setText(
       healthHint,
-      paused ? "Paused — network, console, and navigation capture are suspended" : trunc || debuggerHealthHint(state.session),
+      paused
+        ? "Paused — network, console, and navigation capture are suspended"
+        : trunc || `${debuggerHealthHint(state.session)} · epoch ${state.session.policyEpochCount ?? 1} · ${formatDuration(state.session.expiresAt)}`,
     );
   }
 
@@ -368,6 +515,14 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   if (targetTabsField) {
     targetTabsField.disabled = active || canExport;
   }
+  for (const control of [captureProfileSelect, sessionNameInput, scopeOriginsInput, filterUrlIncludesInput, filterUrlExcludesInput, filterMimeTypesInput, frameIdsInput, captureDurationInput]) {
+    if (control) control.disabled = active || canExport;
+  }
+  for (const field of CAPTURE_FIELD_KEYS) {
+    const input = el<HTMLInputElement>(fieldControlId(field));
+    if (input) input.disabled = active || canExport;
+  }
+  if (btnUpdatePolicy) btnUpdatePolicy.disabled = !active || stopRequested;
 }
 
 async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
@@ -396,6 +551,9 @@ btnStart?.addEventListener("click", async () => {
             urlExcludes: parseFilterList(filterUrlExcludesInput?.value),
             mimeTypes: parseFilterList(filterMimeTypesInput?.value),
           },
+          fields: readFieldPolicy(),
+          frameIds: parseFrameIdList(frameIdsInput?.value),
+          ...(parseDurationMs(captureDurationInput?.value) == null ? {} : { durationMs: parseDurationMs(captureDurationInput?.value) }),
           targetTabIds: [...new Set([tab.id, ...selectedTargetTabIds()])],
         },
       },
@@ -411,6 +569,44 @@ btnStart?.addEventListener("click", async () => {
 
 consentCheckbox?.addEventListener("change", () => {
   if (btnStart) btnStart.disabled = !consentCheckbox.checked;
+  updateEffectivePolicySummary();
+});
+
+for (const field of CAPTURE_FIELD_KEYS) {
+  el<HTMLInputElement>(fieldControlId(field))?.addEventListener("change", updateEffectivePolicySummary);
+}
+for (const input of [frameIdsInput, captureDurationInput]) {
+  input?.addEventListener("input", updateEffectivePolicySummary);
+}
+targetTabsList?.addEventListener("change", updateEffectivePolicySummary);
+
+btnUpdatePolicy?.addEventListener("click", async () => {
+  if (btnUpdatePolicy.disabled) return;
+  btnUpdatePolicy.disabled = true;
+  setText(policyStatus, "Saving a new policy epoch…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      {
+        type: MessageType.UPDATE_CAPTURE_POLICY,
+        policy: {
+          allowedOrigins: parseOriginList(activeScopeOriginsInput?.value) ?? null,
+          fields: readFieldPolicy(true),
+          frameIds: parseFrameIdList(activeFrameIdsInput?.value),
+          targetTabIds: selectedActiveTargetTabIds(),
+          durationMs: parseDurationMs(activeCaptureDurationInput?.value) ?? null,
+        },
+      },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not update capture policy");
+    setText(policyStatus, "Policy updated; earlier evidence retains its original epoch.");
+    await refresh();
+  } catch (err) {
+    setText(policyStatus, err instanceof Error ? err.message : "Could not update capture policy");
+  } finally {
+    if (btnUpdatePolicy) btnUpdatePolicy.disabled = false;
+    await refresh();
+  }
 });
 
 let captureActive = false;
@@ -606,6 +802,7 @@ async function refresh(): Promise<void> {
     captureActive = state.session?.active ?? false;
     if (!captureActive) stopRequested = false;
     render(state, true);
+    if (captureActive) await loadActiveTargetTabs(state.session);
   } catch {
     captureActive = false;
     render({ ...EMPTY_STATE, session: null }, true);

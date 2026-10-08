@@ -56,6 +56,24 @@
       <label for="filter-mime-types" class="field-label">Optional MIME filters</label>
       <input id="filter-mime-types" class="text-input" type="text" placeholder="application/json, text/*" />
       <p class="hint">Filters are captured in the session policy. URL patterns support <code>*</code>; MIME filters apply to response metadata.</p>
+      <label for="frame-ids" class="field-label">Optional frame allowlist</label>
+      <input id="frame-ids" class="text-input" type="text" placeholder="0, 1234" />
+      <p class="hint">Leave blank for all frames. Frame IDs are browser/debugger IDs, not page URLs.</p>
+      <label for="capture-duration" class="field-label">Maximum capture duration (minutes)</label>
+      <input id="capture-duration" class="text-input" type="number" min="1" max="1440" step="1" placeholder="No limit" />
+      <p class="hint">A duration automatically stops and exports the local bundle. Maximum 24 hours.</p>
+      <fieldset id="capture-fields" class="policy-fields">
+        <legend>Evidence consent</legend>
+        <p class="hint">Each category is independent. URLs, headers, bodies, console arguments, and titles are retained only when enabled.</p>
+        <label class="checkbox"><input type="checkbox" id="field-urls" checked /><span>URLs and origin metadata</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-headers" checked /><span>Request and response headers</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-request-bodies" checked /><span>Request bodies</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-response-bodies" checked /><span>Response bodies</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-console-arguments" checked /><span>Console arguments</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-navigation-titles" checked /><span>Navigation and page titles</span></label>
+        <label class="checkbox"><input type="checkbox" id="field-visual-evidence" /><span>Visual evidence (explicit screenshot button still required)</span></label>
+      </fieldset>
+      <p id="effective-policy-summary" class="policy-summary" aria-live="polite"></p>
       <label class="checkbox">
         <input type="checkbox" id="redaction-checkbox" checked />
         <span>Redact secrets and sensitive values (recommended).</span>
@@ -95,6 +113,32 @@
         <span>Markers <strong id="c-markers">0</strong></span>
       </div>
       <p id="health-hint" class="hint"></p>
+      <details id="active-policy-editor" class="policy-editor">
+        <summary>Adjust active capture policy</summary>
+        <p class="hint">Changes create a new immutable policy epoch. Earlier evidence keeps the policy that governed it.</p>
+        <fieldset class="target-tabs">
+          <legend>Capture tabs</legend>
+          <div id="active-target-tabs-list" class="target-tabs-list" aria-live="polite"><p class="hint">Loading tabs…</p></div>
+        </fieldset>
+        <label for="active-scope-origins" class="field-label">Origin allowlist</label>
+        <input id="active-scope-origins" class="text-input" type="text" placeholder="All origins" />
+        <label for="active-frame-ids" class="field-label">Frame allowlist</label>
+        <input id="active-frame-ids" class="text-input" type="text" placeholder="All frames" />
+        <label for="active-capture-duration" class="field-label">New policy duration (minutes)</label>
+        <input id="active-capture-duration" class="text-input" type="number" min="1" max="1440" step="1" placeholder="Clear deadline" />
+        <fieldset class="policy-fields">
+          <legend>Evidence consent</legend>
+          <label class="checkbox"><input type="checkbox" id="active-field-urls" /><span>URLs and origin metadata</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-headers" /><span>Request and response headers</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-request-bodies" /><span>Request bodies</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-response-bodies" /><span>Response bodies</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-console-arguments" /><span>Console arguments</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-navigation-titles" /><span>Navigation and page titles</span></label>
+          <label class="checkbox"><input type="checkbox" id="active-field-visual-evidence" /><span>Visual evidence (explicit screenshot button still required)</span></label>
+        </fieldset>
+        <button type="button" id="btn-update-policy" class="secondary">Save policy epoch</button>
+        <p id="policy-status" class="hint" aria-live="polite"></p>
+      </details>
       <div class="marker-controls">
         <label for="marker-note">Reproduction note</label>
         <input id="marker-note" type="text" maxlength="500" placeholder="What just happened?" />

@@ -4,6 +4,7 @@ import { emptySessionData, readSessionData, writeSessionData } from "../src/pers
 import { captureScreenshot } from "../src/capture/visual-evidence.js";
 import { sampleExportSessionData } from "./fixtures/sample-session.js";
 import { sampleSession } from "./helpers/fixtures.js";
+import { DEFAULT_CAPTURE_FIELDS } from "../src/shared/types.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 import { unzipToMap } from "./helpers/unzip.js";
 
@@ -21,7 +22,7 @@ describe("explicit visual evidence", () => {
     });
     await writeSessionData({
       ...emptySessionData(),
-      session: sampleSession({ active: true, tabId: 17 }),
+      session: sampleSession({ active: true, tabId: 17, options: { ...sampleSession().options, fields: { ...DEFAULT_CAPTURE_FIELDS, visualEvidence: true } } }),
     });
   });
 
@@ -58,6 +59,7 @@ describe("explicit visual evidence", () => {
 
   it("exports observed screenshots as optional manifest-listed PNG artifacts", async () => {
     const data = sampleExportSessionData();
+    data.session!.options.fields = { ...DEFAULT_CAPTURE_FIELDS, visualEvidence: true };
     data.screenshots = [{
       id: "shot-1",
       sessionId: data.session!.id,
@@ -84,7 +86,7 @@ describe("explicit visual evidence", () => {
   });
 
   it("bounds screenshot count and bytes and records truncation", async () => {
-    const session = sampleSession({ active: true, tabId: 17 });
+    const session = sampleSession({ active: true, tabId: 17, options: { ...sampleSession().options, fields: { ...DEFAULT_CAPTURE_FIELDS, visualEvidence: true } } });
     const screenshots = Array.from({ length: 13 }, (_, index) => ({
       id: `shot-${index}`,
       sessionId: session.id,

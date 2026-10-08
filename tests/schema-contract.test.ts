@@ -38,6 +38,17 @@ describe("versioned schema contract", () => {
     const rawConsole = JSON.parse(files["raw-console.json"]);
     expect(manifest.schemaVersion).toBe(4);
     expect(manifest.coverage.schemaVersion).toBe(4);
+    expect(manifest.privacy.exportDestination).toBe("local-device");
+    expect(manifest.privacy.fields.visualEvidence).toEqual(expect.objectContaining({
+      captured: expect.any(Number),
+      excluded: expect.any(Number),
+      redacted: expect.any(Number),
+      truncated: expect.any(Number),
+      dropped: expect.any(Number),
+      unavailable: expect.any(Number),
+    }));
+    expect(manifest.coverage.policy.fields).toHaveProperty("visualEvidence");
+    expect(manifest.coverage.policy).toHaveProperty("targetTabIds");
     expect(har.log.version).toBe("1.2");
     expect(Array.isArray(rawConsole)).toBe(true);
     expect(Object.keys(files).sort()).toEqual([

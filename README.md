@@ -19,6 +19,9 @@ Start capture only after explicit user activation, reproduce a problem, stop cap
 - Bounded storage with visible truncation and debugger health gaps.
 - Offline HTML report plus raw HAR and console artifacts.
 - Explicit, optional screenshots with bounded local storage and manifest warnings.
+- Field-level consent for URLs, headers, request/response bodies, console arguments, titles, and visual evidence (visual evidence is off by default).
+- Live scope updates for selected tabs, origins, frames, and duration; each change creates an immutable policy epoch.
+- Machine-readable privacy receipt with per-field captured/excluded/redacted/truncated/dropped/unavailable counts.
 - ZIP inspector for CI, support, and local debugging workflows.
 
 ## Stack
@@ -55,7 +58,7 @@ Every export contains exactly four required artifacts:
 | `report.html` | Offline searchable timeline, coverage, citation, and health view |
 | `raw.har` | Standard HAR 1.2 network log; redacted by default, with opt-in bounded bodies |
 | `raw-console.json` | Console, exception, and browser log records; redacted by default |
-| `export-manifest.json` | Version, privacy flags, capture options, artifact list, coverage, and health snapshot |
+| `export-manifest.json` | Version, privacy flags, field-level privacy receipt, capture options, artifact list, coverage, and health snapshot |
 
 An export may also contain `screenshots/<id>.png` files when the user explicitly
 requests screenshots during capture. These are optional opaque PNG artifacts;
@@ -68,11 +71,19 @@ included in coverage. The explicit one-request control overrides the normal
 body-capture opt-in for one in-scope request, while safe MIME and byte budgets
 still apply.
 
+Field consent is independent of the named profile. A disabled field is removed
+before persistence and export; its state is recorded as `excluded` with a stable
+`[EXCLUDED]` marker only where an artifact needs a required string field. Frame
+and tab scope are enforced before retention. The active policy editor starts a
+new immutable epoch, so the receipt and raw artifacts can explain which policy
+governed each event. A duration deadline stops capture and starts the local ZIP
+export, including after a service-worker restart.
+
 ## Core flow
 
 1. Popup grants explicit capture intent and lets the user select the current tab plus any additional HTTP(S) tabs through `activeTab`/`tabs`.
-2. Service worker validates every selected tab, snapshots capture options including redaction state, then creates session metadata and attaches CDP independently to each target.
-3. The selected profile fixes capture scope for the session; CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries for selected targets. URL/MIME filters narrow network evidence, and pause temporarily suspends evidence capture while preserving the session. Screenshots and one-request body capture require separate explicit actions.
+2. Service worker validates every selected tab, snapshots capture options including redaction and field consent, then creates session metadata and attaches CDP independently to each target.
+3. The selected profile and field policy govern network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries for selected targets. URL/MIME, origin, frame, and tab scope narrow network evidence, and pause temporarily suspends evidence capture while preserving the session. Screenshots and one-request body capture require separate explicit actions.
 4. Storage keeps network data in IndexedDB and low-volume evidence in bounded local storage.
 5. Stop detaches CDP, snapshots health, builds four artifacts, and downloads ZIP locally.
 
@@ -100,7 +111,8 @@ Chrome displays its debugger warning while capture is active. MV3 service-worker
 - Screenshots: explicit only, newest 12 entries, 8 MiB total; PNG bytes are opaque and not text-redacted.
 - Exports are observational captures, not guaranteed complete copies of a page.
 - `export-manifest.json` records field coverage, truncation, body skips, persistence errors, and debugger gaps.
-- Coverage records the capture policy and every pause interval so user-controlled gaps are explicit.
+- Coverage records the effective field/tab/frame/duration policy, immutable policy epochs, every pause interval, and screenshot/body states so user-controlled gaps are explicit.
+- The privacy receipt is local-device-only and does not imply that visual pixels or an explicit redaction opt-out are safe to share.
 - Treat opt-out exports as sensitive because HAR bodies and console records may contain secrets.
 
 ## Repository layout

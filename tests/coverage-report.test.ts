@@ -113,6 +113,7 @@ describe("coverage report", () => {
       markersTruncated: 0,
       contextSnapshotsTruncated: 0,
       performanceSignalsTruncated: 0,
+      screenshotsTruncated: 0,
       filteredNetworkRequests: 0,
       fairBudgetEvictions: 0,
       bodySkipReasons: {},

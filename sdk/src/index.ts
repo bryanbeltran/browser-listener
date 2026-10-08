@@ -51,7 +51,21 @@ export interface BundleManifest {
   sessionId?: string;
   extensionVersion?: string;
   exportedAt?: number;
-  privacy?: { redactionEnabled?: boolean; [key: string]: unknown };
+  privacy?: {
+    redactionEnabled?: boolean;
+    exportDestination?: string;
+    userConfirmedExceptions?: string[];
+    fields?: Record<string, {
+      captured?: number;
+      excluded?: number;
+      redacted?: number;
+      truncated?: number;
+      dropped?: number;
+      unavailable?: number;
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  };
   coverage?: {
     schemaVersion?: number;
     totals?: Record<string, number>;
@@ -198,6 +212,17 @@ export function validateBundle(bundle: Bundle): ValidationResult {
   if (bundle.manifest.format !== "browser-listener") add("export-manifest.json.format", "format", "Unsupported bundle format");
   if (![2, 3, 4].includes(bundle.manifest.schemaVersion ?? -1)) {
     add("export-manifest.json.schemaVersion", "schema", "Unsupported manifest schema version");
+  }
+  if ((bundle.manifest.schemaVersion ?? 0) >= 4) {
+    if (bundle.manifest.privacy?.exportDestination !== "local-device") {
+      add("export-manifest.json.privacy.exportDestination", "privacy-receipt", "Privacy receipt must declare local-device export");
+    }
+    if (!Array.isArray(bundle.manifest.privacy?.userConfirmedExceptions)) {
+      add("export-manifest.json.privacy.userConfirmedExceptions", "privacy-receipt", "Privacy receipt exceptions are missing");
+    }
+    if (!bundle.manifest.privacy?.fields || typeof bundle.manifest.privacy.fields !== "object") {
+      add("export-manifest.json.privacy.fields", "privacy-receipt", "Privacy field receipt is missing");
+    }
   }
   if (bundle.manifest.coverage?.schemaVersion != null && ![1, 2, 3, 4].includes(bundle.manifest.coverage.schemaVersion)) {
     add("export-manifest.json.coverage.schemaVersion", "schema", "Unsupported coverage schema version");

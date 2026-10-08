@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emptySessionData, readSessionData, writeSessionData } from "../src/persistence/store.js";
 import { sampleSession } from "./helpers/fixtures.js";
+import { DEFAULT_CAPTURE_FIELDS } from "../src/shared/types.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 
 describe("CDP network capture", () => {
@@ -253,5 +254,54 @@ describe("CDP network capture", () => {
     expect(ordinary).toMatchObject({ responseBodyState: "excluded", responseBodySkipReason: "capture-disabled" });
     expect(ordinary?.responseBody).toBeUndefined();
     expect(sendCommand.mock.calls.filter(([, method]) => method === "Network.getResponseBody")).toHaveLength(1);
+  });
+
+  it("does not let one-request capture override explicit body field denial", async () => {
+    const current = await readSessionData();
+    await writeSessionData({
+      ...current,
+      session: {
+        ...current.session!,
+        options: {
+          ...current.session!.options,
+          fields: { ...DEFAULT_CAPTURE_FIELDS, requestBodies: false, responseBodies: false },
+        },
+      },
+    });
+    const { armOneRequestCapture } = await import("../src/capture/session-manager.js");
+    await armOneRequestCapture();
+    const { registerDebuggerCapture } = await import("../src/capture/debugger-capture.js");
+    registerDebuggerCapture();
+    onEvent?.(
+      { tabId: 8 },
+      "Network.requestWillBeSent",
+      {
+        requestId: "denied-one-shot",
+        request: {
+          url: "https://example.test/api/denied",
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+        },
+      },
+    );
+    onEvent?.(
+      { tabId: 8 },
+      "Network.responseReceived",
+      { requestId: "denied-one-shot", response: { status: 200, mimeType: "application/json" } },
+    );
+    onEvent?.({ tabId: 8 }, "Network.loadingFinished", { requestId: "denied-one-shot" });
+
+    let data = await readSessionData();
+    for (let attempt = 0; attempt < 30 && !data.network[0]?.requestBodyState; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      data = await readSessionData();
+    }
+    expect(data.network[0]).toMatchObject({
+      requestBodyState: "excluded",
+      requestBodySkipReason: "field-disabled",
+      responseBodyState: "excluded",
+      responseBodySkipReason: "field-disabled",
+    });
+    expect(sendCommand.mock.calls.filter(([, method]) => method === "Network.getResponseBody")).toHaveLength(0);
   });
 });

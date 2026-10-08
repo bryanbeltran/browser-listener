@@ -18,16 +18,24 @@ export function buildPopupStateSnapshot(
   counts: PopupCounts,
 ): PopupStateSnapshot {
   const active = Boolean(session?.active);
-  const hasEvidence = counts.network + counts.navigation + counts.console + (counts.markers ?? 0) > 0;
+  const hasEvidence = counts.network + counts.navigation + counts.console + (counts.markers ?? 0) + (counts.screenshots ?? 0) > 0;
   return {
     session: session
       ? {
           id: session.id,
           active,
           startedAt: session.startedAt,
+          primaryTabId: session.tabId,
           stoppedAt: session.stoppedAt,
           tabClosedDuringCapture: session.tabClosedDuringCapture,
           allowedOrigins: session.options.allowedOrigins,
+          filters: session.options.filters,
+          fields: session.options.fields,
+          frameIds: session.options.frameIds,
+          durationMs: session.options.durationMs,
+          policyEpochCount: session.policyEpochs?.length ?? 1,
+          currentPolicyEpochId: session.policyEpochs?.at(-1)?.id,
+          expiresAt: session.expiresAt,
           paused: session.paused,
           health: {
             debuggerAttached: session.health.debuggerAttached ?? false,
@@ -54,6 +62,7 @@ export function popupStateFromSnapshot(
       navigation: snapshot.counts?.navigation ?? 0,
       console: snapshot.counts?.console ?? 0,
       markers: snapshot.counts?.markers ?? 0,
+      ...(snapshot.counts?.screenshots == null ? {} : { screenshots: snapshot.counts.screenshots }),
     },
     canExport: snapshot.canExport,
     redactionEnabled,

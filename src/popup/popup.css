@@ -99,6 +99,41 @@ h2 {
   gap: 6px;
 }
 
+.policy-fields {
+  margin: 12px 0;
+  padding: 8px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+}
+
+.policy-fields legend {
+  padding: 0 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.policy-fields .checkbox {
+  margin: 7px 0;
+}
+
+.policy-summary {
+  margin: 8px 0;
+  padding: 7px;
+  border-left: 3px solid #8888;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.policy-editor {
+  margin: 10px 0;
+  font-size: 0.8rem;
+}
+
+.policy-editor summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .target-tab-option {
   display: flex;
   gap: 8px;

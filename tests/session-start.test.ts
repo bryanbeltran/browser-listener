@@ -6,6 +6,7 @@ import {
   writeSessionData,
 } from "../src/persistence/store.js";
 import { sampleSession } from "./helpers/fixtures.js";
+import { DEFAULT_CAPTURE_FIELDS } from "../src/shared/types.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
 
 describe("session start", () => {
@@ -141,5 +142,46 @@ describe("session start", () => {
     expect(resumed?.paused).toBe(false);
     expect(resumed?.pauseIntervals?.[0]?.endedAt).toBeTypeOf("number");
     expect(resumed?.pauseIntervals?.[0]?.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("creates immutable policy epochs for live field and duration changes", async () => {
+    const { createSession, activateCaptureSession, updateCapturePolicy } = await import("../src/capture/session-manager.js");
+    const created = await createSession(7, "https://example.test/problem", {
+      fields: { ...DEFAULT_CAPTURE_FIELDS, urls: true },
+      frameIds: ["0"],
+      durationMs: 60_000,
+    });
+    await activateCaptureSession();
+    const updated = await updateCapturePolicy({
+      fields: { ...DEFAULT_CAPTURE_FIELDS, urls: false },
+      frameIds: ["child"],
+      durationMs: 120_000,
+    });
+
+    expect(updated?.policyEpochs).toHaveLength(2);
+    expect(updated?.policyEpochs?.[0]).toMatchObject({
+      id: created.policyEpochs?.[0]?.id,
+      fields: { urls: true },
+      frameIds: ["0"],
+      durationMs: 60_000,
+    });
+    expect(updated?.policyEpochs?.[0]?.endedAt).toBeTypeOf("number");
+    expect(updated?.policyEpochs?.[1]).toMatchObject({
+      fields: { urls: false },
+      frameIds: ["child"],
+      durationMs: 120_000,
+    });
+    expect(updated?.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("clears a duration deadline without rewriting earlier epochs", async () => {
+    const { createSession, activateCaptureSession, updateCapturePolicy } = await import("../src/capture/session-manager.js");
+    await createSession(7, "https://example.test/problem", { durationMs: 60_000 });
+    await activateCaptureSession();
+    const updated = await updateCapturePolicy({ durationMs: null });
+    expect(updated?.expiresAt).toBeUndefined();
+    expect(updated?.policyEpochs).toHaveLength(2);
+    expect(updated?.policyEpochs?.[0]?.durationMs).toBe(60_000);
+    expect(updated?.policyEpochs?.[1]?.durationMs).toBeUndefined();
   });
 });
