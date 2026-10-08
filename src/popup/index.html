@@ -10,7 +10,7 @@
     <header>
       <div class="header-titles">
         <h1>Browser Listener</h1>
-        <p class="tagline">Collect Facebook posts, comments &amp; reactions locally</p>
+        <p class="tagline">Create a local, searchable Facebook archive</p>
       </div>
       <span id="app-version" class="version-label" aria-label="Extension version"></span>
     </header>
@@ -21,10 +21,15 @@
 
     <section id="start-panel" class="panel hidden">
       <p class="intro-text">
-        Organize Facebook posts, comments, and reactions as you browse. Everything stays on this
-        device — no upload, no telemetry. Sensitive headers, cookies, and tokens are redacted.
+        Capture Facebook activity you are authorized to collect and export a searchable archive.
+        Everything stays on this device — no upload, no telemetry. Sensitive headers, cookies, and
+        tokens are redacted.
       </p>
-      <button type="button" id="btn-start" class="primary">Start capture</button>
+      <label class="checkbox">
+        <input type="checkbox" id="consent-checkbox" />
+        <span>I have permission to capture this page and its visible activity.</span>
+      </label>
+      <button type="button" id="btn-start" class="primary" disabled>Start capture</button>
       <p id="start-error" class="hint error hidden" role="alert"></p>
     </section>
 
@@ -48,7 +53,7 @@
       <button type="button" id="btn-new-session" class="primary">Start new capture</button>
     </section>
 
-    <p class="hint footer">Open Facebook, start capture, browse, then stop to export.</p>
+    <p class="hint footer">Open Facebook, start capture, browse, then stop to export a ZIP.</p>
     <script type="module" src="./index.ts"></script>
   </body>
 </html>

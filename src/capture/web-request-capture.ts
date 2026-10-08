@@ -43,7 +43,9 @@ async function flush(requestId: string, patch: Partial<NetworkEntry>): Promise<v
   }
 }
 
-const filter: chrome.webRequest.RequestFilter = { urls: ["<all_urls>"] };
+const filter: chrome.webRequest.RequestFilter = {
+  urls: ["https://facebook.com/*", "https://*.facebook.com/*"],
+};
 
 export function registerWebRequestCapture(): void {
   chrome.webRequest.onBeforeRequest.addListener(

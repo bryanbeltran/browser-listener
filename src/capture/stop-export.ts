@@ -9,6 +9,7 @@ import { readSessionMeta } from "../persistence/store.js";
 import { prepareZipExport } from "../export/orchestrator.js";
 import { downloadZipFromWorker } from "../export/download.js";
 import type { TraceSummary } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 type ZipExportBundle = {
   zip: Uint8Array;
@@ -27,7 +28,7 @@ async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
       const tab = await chrome.tabs.get(session.tabId);
       if (tab.url) await updateSessionTabUrl(tab.url);
       await flushPendingApiBodyCaptures();
-      if (tab.url?.includes("facebook.com") && session.options.reactionHydration) {
+      if (isFacebookUrl(tab.url) && session.options.reactionHydration) {
         await runExportReactionHydration(session.tabId);
         await flushPendingApiBodyCaptures();
       }

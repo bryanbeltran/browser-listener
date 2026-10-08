@@ -8,6 +8,7 @@ describe("zip builder", () => {
       zipFileMapFromExport({
         reportHtml: "<html></html>",
         traceSummary: "{}",
+        coverageReport: "{}",
         manifest: "{}",
         graphqlCaptures: "[]",
         groupActivity: "{}",
@@ -17,6 +18,7 @@ describe("zip builder", () => {
     expect(Object.keys(files).sort()).toEqual(
       [
         "export-manifest.json",
+        "coverage-report.json",
         "graphql-captures.json",
         "group-activity.json",
         "report.html",

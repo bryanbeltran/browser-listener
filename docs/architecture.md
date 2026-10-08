@@ -1,6 +1,6 @@
 # Architecture
 
-Browser Listener is a Manifest V3 Chrome extension for **collecting Facebook activity while browsing** — posts, comments, reactions, and people — and exporting a local ZIP for offline review.
+Browser Listener is a Manifest V3 Chrome extension for **creating portable, searchable Facebook session archives** — posts, comments, reactions, people, provenance, and capture health — with no upload or telemetry.
 
 ## Data flow
 
@@ -37,8 +37,8 @@ flowchart LR
 | `capture/` | Session lifecycle, CDP debugger, GraphQL body capture, webRequest metadata |
 | `redaction/` | Default-deny sensitive keys; applied on persist + export |
 | `persistence/` | `chrome.storage.local` (session meta), IndexedDB (network entries), caps, SW recovery |
-| `export/` | ZIP orchestration, CSV, graphql-captures archive |
-| `report/` | Facebook-focused offline HTML |
+| `export/` | ZIP orchestration, CSV, coverage, graphql-captures archive |
+| `report/` | Searchable, citation-friendly offline archive HTML |
 | `enrichers/` | Facebook GraphQL parser (always applied at export) |
 
 ## Capture strategy
@@ -50,6 +50,8 @@ flowchart LR
 
 - Redaction runs on **write** (`persistence/store`) and again on **export** (`export/orchestrator`).
 - ZIP export never uploads; `export-manifest.json` records `privacy.localOnly: true`.
+- Capture is restricted to HTTPS Facebook hosts and requires an explicit start action.
+- Users should capture only pages and data they are authorized to collect.
 
 ## MV3 reliability
 
@@ -71,11 +73,11 @@ flowchart LR
 | `debugger` | CDP GraphQL capture |
 | `webRequest` | Network metadata fallback |
 | `webNavigation` | Track tab URL during capture |
-| `<all_urls>` | Capture on Facebook tabs (narrow before store publish) |
+| `https://facebook.com/*`, `https://*.facebook.com/*` | Capture authorized Facebook tabs only |
 
 ## Export bundle
 
-Core files: `report.html`, `trace-summary.json`, `group-activity.json`, `graphql-captures.json`, `csv/*.csv`, `export-manifest.json`.
+Core files: `report.html`, `trace-summary.json`, `coverage-report.json`, `group-activity.json`, `graphql-captures.json`, `csv/*.csv`, `export-manifest.json`.
 
 ## Facebook data model
 
@@ -96,77 +98,14 @@ FacebookReaction
 └── source query (e.g. CometUFIReactionsDialog)
 ```
 
-**Planned:** `causeTags[]` on posts, comments, and reactions for pro/anti/neutral labeling on chosen causes.
+## Coverage and provenance
 
-## Classification pipeline
+`coverage-report.json` is generated at export time from the redacted session data. It records the
+source URL and capture interval, entity totals, field-level presence metrics, parser warnings, and
+storage/lifecycle quality signals. The offline report renders the same information and provides a
+copyable citation containing the source, capture interval, and session id.
 
-Pro/anti user labeling (e.g. Trump) is a **downstream** concern. The extension captures and exports; a separate local ingest layer merges sessions and runs classifiers. Do **not** put a database inside the extension capture path — `chrome.storage.local` is session-scoped, size-limited, and unsuited to heavy analytics or re-processing.
-
-```mermaid
-flowchart LR
-  subgraph ext [Extension]
-    Capture[Capture]
-    Store[(storage.local)]
-    Export[ZIP export]
-    Capture --> Store --> Export
-  end
-
-  subgraph local [Local processing CLI]
-    Ingest[ingest export.zip]
-    DB[(SQLite / DuckDB)]
-    Classify[Stance classifier]
-    Rollup[User stance rollup]
-    Ingest --> DB --> Classify --> Rollup
-  end
-
-  Export --> Ingest
-  Rollup --> Out[user-stance.csv / reports]
-```
-
-### What the DB stores
-
-| Store in DB | Keep in ZIP only |
-|-------------|------------------|
-| Parsed posts, comments, reactions, people | Raw `graphql-captures.json` (parser debug) |
-| `content_labels` (cause, stance, confidence, classifier version) | Full network archive when not needed for re-parse |
-| Ingest provenance (export checksum, session id, imported at) | — |
-| Optional materialized `user_signals` / `user_stance` | — |
-
-### Phasing
-
-1. ~~**Extension export artifacts**~~ — `authorId` in CSVs, flat `user-activity` export, denormalized reaction context *(done)*.
-2. **Blocking workstreams (1–4)** — stance labeling, processing pipeline, coverage report, capture completeness.
-3. **Ingest CLI** — idempotent upsert from `group-activity.json` (+ flat exports) into SQLite.
-4. **Labeling** — write `content_labels` for `cause: "trump"`; reactions inherit stance from labeled targets.
-5. **Rollup** — aggregate per `userId` across all ingested sessions; export `user-stance.csv`.
-
-### Blocking workstreams
-
-| # | Workstream | Layer | Status |
-|---|------------|-------|--------|
-| **1** | Stance labeling — `causeTags` plumbing, Trump classifier, `content_labels` | Local CLI + export schema | Not started |
-| **2** | Processing pipeline — ingest, multi-session merge, `user_stance` rollup | Local CLI / DB | Not started |
-| **3** | Classification readiness report — `coverage-report.json` with field-level stats | Extension export | Not started |
-| **4** | Capture completeness — reaction gaps, `partialParse`, truncation visibility | Extension capture | Partial (hydration exists; gaps remain) |
-
-### Prerequisites before serious classification
-
-| # | Feature | Layer | Status |
-|---|---------|-------|--------|
-| 1 | Classification readiness report (% text, authorId, reaction coverage) | Extension export | Not started |
-| 2 | Stable `authorId` in JSON and CSVs | Extension export | Done |
-| 3 | Flat `user-activity` export | Extension export | Done |
-| 4 | Complete post reaction capture (hydration + dialog preference) | Extension capture | Partial |
-| 5 | Comment reaction capture | Extension capture | Partial |
-| 6 | Denormalized reaction context on export rows | Extension export | Done |
-| 7 | `causeTags` enricher plumbing (generic schema) | Extension enricher | Not started |
-| 8 | Content stance classifier (Trump first) | Local CLI | Not started |
-| 9 | User stance rollup export | Local CLI | Not started |
-| 10 | Multi-session merge via ingest | Local CLI / DB | Not started |
-
-### Capture completeness (#4)
-
-Reaction-based classification needs both **who reacted** and **what they reacted to** (`targetText`). Current gaps:
+Exports are observational archives, not guaranteed complete copies of a page. Current completeness gaps include:
 
 | Gap | Cause | Planned fix |
 |-----|-------|-------------|
@@ -174,10 +113,17 @@ Reaction-based classification needs both **who reacted** and **what they reacted
 | Missing comment reactors | Comment `feedbackId` not in capture; comment not hydration target | `selectNextCommentForHydration` + export pass budgets for comments |
 | `reactionType` missing | Tooltip rows lack per-user type | `backfillReactionTypes` peers dialog rows onto tooltip rows |
 | `targetText` missing on reactions | Post/comment not captured or `partialParse` | Prioritize hydration for reactions lacking `targetText`; improve partial JSON text extraction |
-| Truncated network buffer | Byte budget or entry soft cap exceeded | Evict oldest entries; surface in `coverage-report.json` *(planned)* |
+| Truncated network buffer | Byte budget or entry soft cap exceeded | Evict oldest entries; surface in `coverage-report.json` |
 
-Hydration already runs in two phases: slow session sampling (`SAMPLE_REACTION_TYPE_IDS`) and a final `runExportReactionHydration` pass before ZIP. Remaining work is **coverage-driven target selection** (hydrate under-covered content first), **budget tuning** tied to coverage metrics, and **paginating until `captured >= reactionCount`** per target.
+Hydration already runs in two phases: slow session sampling (`SAMPLE_REACTION_TYPE_IDS`) and a final `runExportReactionHydration` pass before ZIP. Remaining work is coverage-driven target selection (hydrate under-covered content first), budget tuning tied to coverage metrics, and paginating until `captured >= reactionCount` per target.
+
+The extension remains ZIP-export only. `npm run inspect -- export.zip` reads the archive locally and
+prints its manifest, provenance, entity totals, quality warnings, and file list. Sensitive-trait or
+political inference is explicitly outside the core extension; any future analysis must be a separate,
+opt-in local tool with its own privacy review.
 
 ## Extensibility
 
-Register enrichers in `src/enrichers/index.ts`. All registered enrichers run at export time. Classification enrichers that need cross-session state belong in the local ingest CLI, not the extension.
+Register enrichers in `src/enrichers/index.ts`. All registered enrichers run at export time. New site
+adapters should be added only after their permissions, capture scope, redaction behavior, and export
+privacy boundary are documented.

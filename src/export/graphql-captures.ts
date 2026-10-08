@@ -1,5 +1,6 @@
 import { redactDeep, redactString } from "../redaction/engine.js";
 import type { NetworkEntry } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 export interface GraphqlCaptureRecord {
   networkId: string;
@@ -17,7 +18,7 @@ export interface GraphqlCaptureRecord {
 function isFacebookGraphql(entry: NetworkEntry): boolean {
   try {
     const u = new URL(entry.url);
-    return u.hostname.endsWith("facebook.com") && /\/api\/graphql\/?$/i.test(u.pathname);
+    return isFacebookUrl(entry.url) && /\/api\/graphql\/?$/i.test(u.pathname);
   } catch {
     return false;
   }

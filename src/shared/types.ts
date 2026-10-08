@@ -13,7 +13,7 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
 /** Where a post was encountered while browsing. */
 export type FacebookSurface = "group" | "timeline" | "page" | "unknown";
 
-/** Planned: manual or ML-assisted stance on a cause (not populated yet). */
+/** Optional downstream annotation; the core extension does not infer stance. */
 export interface FacebookCauseTag {
   cause: string;
   stance: "pro" | "anti" | "neutral";
@@ -258,6 +258,58 @@ export interface ArtifactManifestEntry {
   bytes?: number;
 }
 
+export interface CoverageMetric {
+  present: number;
+  total: number;
+  percent: number;
+}
+
+/** Machine-readable provenance and completeness summary for an export. */
+export interface CoverageReport {
+  schemaVersion: 1;
+  generatedAt: number;
+  source: {
+    tabUrl?: string;
+    sessionPermalink?: string;
+    startedAt?: number;
+    stoppedAt?: number;
+  };
+  totals: {
+    network: number;
+    groups: number;
+    members: number;
+    people: number;
+    posts: number;
+    comments: number;
+    reactions: number;
+  };
+  fields: {
+    posts: {
+      text: CoverageMetric;
+      authorId: CoverageMetric;
+      url: CoverageMetric;
+    };
+    comments: {
+      text: CoverageMetric;
+      authorId: CoverageMetric;
+      postId: CoverageMetric;
+    };
+    reactions: {
+      userId: CoverageMetric;
+      targetId: CoverageMetric;
+      targetText: CoverageMetric;
+      reactionType: CoverageMetric;
+    };
+  };
+  quality: {
+    partialPosts: number;
+    parseWarnings: number;
+    networkTruncated: number;
+    healthGaps: number;
+    persistenceErrors: number;
+  };
+}
+
 export interface ExportManifest {
   /** Extension version at export time. */
   version: string;
@@ -267,6 +319,7 @@ export interface ExportManifest {
   privacy: { localOnly: true; remoteUpload: false };
   options: CaptureOptions;
   files: ArtifactManifestEntry[];
+  coverage: { path: "coverage-report.json"; schemaVersion: 1 };
   health: SessionHealth;
 }
 

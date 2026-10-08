@@ -26,12 +26,16 @@ import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
 import type { CaptureOptions } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 async function startWithConsent(
   tabId: number,
   options: Partial<CaptureOptions> = {},
 ): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
+  if (!isFacebookUrl(tab.url)) {
+    throw new Error("Open a Facebook page before starting capture");
+  }
   const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
   await createSession(tabId, tab.url, merged);
   resetReactionHydrationScheduler();

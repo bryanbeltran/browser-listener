@@ -2,6 +2,7 @@ import { applyEnrichers } from "../enrichers/index.js";
 import { redactDeep } from "../redaction/engine.js";
 import { readSessionData } from "../persistence/store.js";
 import { generateReportHtml } from "../report/generate.js";
+import { buildCoverageReport } from "./coverage.js";
 import { buildExportManifest, baseManifestFiles } from "./manifest-builder.js";
 import { buildTraceSummary } from "./trace-summary.js";
 import { buildFacebookCsvFiles } from "./facebook-csv.js";
@@ -24,6 +25,7 @@ async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
   const facebookActivity = data.enrichments?.facebookGroups;
   const graphqlCaptures = buildGraphqlCaptures(data.network);
   const csvFiles = facebookActivity ? buildFacebookCsvFiles(facebookActivity) : {};
+  const coverageReport = buildCoverageReport(data);
   const files = baseManifestFiles(
     Boolean(facebookActivity),
     graphqlCaptures.length > 0,
@@ -31,8 +33,9 @@ async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
   );
 
   const bundle = {
-    reportHtml: generateReportHtml(data),
+    reportHtml: generateReportHtml(data, coverageReport),
     traceSummary: JSON.stringify(buildTraceSummary(data), null, 2),
+    coverageReport: JSON.stringify(coverageReport, null, 2),
     manifest: JSON.stringify(buildExportManifest(data, files), null, 2),
     graphqlCaptures:
       graphqlCaptures.length > 0

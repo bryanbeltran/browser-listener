@@ -50,12 +50,13 @@ import type {
   FacebookShareInfo,
   NetworkEntry,
 } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 import type { SessionEnricher } from "./types.js";
 
 function isFacebookGraphql(entry: NetworkEntry): boolean {
   try {
     const u = new URL(entry.url);
-    return u.hostname.endsWith("facebook.com") && /\/api\/graphql\/?$/i.test(u.pathname);
+    return isFacebookUrl(entry.url) && /\/api\/graphql\/?$/i.test(u.pathname);
   } catch {
     return false;
   }

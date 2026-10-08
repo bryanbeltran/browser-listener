@@ -1,4 +1,5 @@
 import type { NetworkEntry } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 export function parseGraphqlFormBody(body?: string): Record<string, string> {
   if (!body) return {};
@@ -13,7 +14,7 @@ export function parseGraphqlFormBody(body?: string): Record<string, string> {
 export function isFacebookGraphqlUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.hostname.endsWith("facebook.com") && /\/api\/graphql\/?$/i.test(u.pathname);
+    return isFacebookUrl(url) && /\/api\/graphql\/?$/i.test(u.pathname);
   } catch {
     return false;
   }

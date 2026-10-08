@@ -175,7 +175,7 @@ async function updatePopupSnapshot(
   opts: { debounce: boolean },
 ): Promise<void> {
   if (opts.debounce) {
-    schedulePopupSnapshot(session, networkCount);
+    schedulePopupSnapshot(networkCount);
     return;
   }
   cancelPopupDebounce();

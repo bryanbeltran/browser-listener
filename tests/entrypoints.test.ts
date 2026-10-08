@@ -8,6 +8,11 @@ describe("browser extension entrypoints", () => {
     expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.content_scripts).toBeUndefined();
     expect(manifest.permissions).not.toContain("pageCapture");
+    expect(manifest.host_permissions).toEqual([
+      "https://facebook.com/*",
+      "https://*.facebook.com/*",
+    ]);
+    expect(manifest.host_permissions).not.toContain("<all_urls>");
   });
 
   it("export orchestrator module loads", async () => {

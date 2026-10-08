@@ -3,13 +3,13 @@ import { recordHealthGap } from "../persistence/store.js";
 import { redactDeep, redactString } from "../redaction/engine.js";
 import { getActiveSession } from "./session-manager.js";
 import type { NetworkEntry } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 const API_BODY_PATHS = [/\/api\/graphql\/?$/i, /\/ajax\/bulk-route-definitions\/?$/i];
 
 export function shouldCaptureApiBody(url: string): boolean {
   try {
-    const host = new URL(url).hostname;
-    if (!host.endsWith("facebook.com")) return false;
+    if (!isFacebookUrl(url)) return false;
     const path = new URL(url).pathname;
     return API_BODY_PATHS.some((pattern) => pattern.test(path));
   } catch {

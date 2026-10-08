@@ -12,8 +12,6 @@ import {
 } from "../enrichers/facebook-parse.js";
 import {
   buildGraphqlFormBody,
-  findGraphqlDocId,
-  findGraphqlRequestTemplate,
   parseGraphqlFormBody,
   tabContentRefetchVariables,
   tooltipReactionVariables,
@@ -28,6 +26,7 @@ import type {
   FacebookReaction,
   NetworkEntry,
 } from "../shared/types.js";
+import { isFacebookUrl } from "../shared/urls.js";
 
 export const SESSION_HYDRATION_MAX_POSTS = 8;
 export const SESSION_HYDRATION_MAX_COMMENTS = 5;
@@ -464,7 +463,7 @@ async function hydrateTarget(
 ): Promise<boolean> {
   let network: NetworkEntry[] = [];
   let template = getCachedGraphqlTemplate(network);
-  let plan = template ? resolveHydrationQuery(network, opts.preferTabRefetch) : null;
+  const plan = template ? resolveHydrationQuery(network, opts.preferTabRefetch) : null;
 
   if (!template || !plan) {
     const data = await readSessionData();
@@ -551,7 +550,7 @@ async function tabReadyForHydration(
 ): Promise<boolean> {
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (!tab.url?.includes("facebook.com")) return false;
+    if (!isFacebookUrl(tab.url)) return false;
     if (requireActive && !tab.active) return false;
     return true;
   } catch {
@@ -564,7 +563,7 @@ async function runReactionHydrationCycle(tabId: number): Promise<void> {
 
   const session = await getActiveSession();
   if (!session?.active || !session.options.reactionHydration) return;
-  if (!session.tabUrl?.includes("facebook.com")) return;
+  if (!isFacebookUrl(session.tabUrl)) return;
   if (getAttachedTabId() !== tabId) return;
   if (
     state.postsHydrated >= SESSION_HYDRATION_MAX_POSTS &&
@@ -647,7 +646,7 @@ async function runReactionHydrationCycle(tabId: number): Promise<void> {
 export async function runExportReactionHydration(tabId: number): Promise<void> {
   const session = await getActiveSession();
   if (!session?.active || !session.options.reactionHydration) return;
-  if (!session.tabUrl?.includes("facebook.com")) return;
+  if (!isFacebookUrl(session.tabUrl)) return;
   if (getAttachedTabId() !== tabId) return;
   if (!(await tabReadyForHydration(tabId, false))) return;
 

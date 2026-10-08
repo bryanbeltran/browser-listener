@@ -22,6 +22,7 @@ const startPanel = el("start-panel");
 const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
+const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
@@ -129,7 +130,7 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
     showExportEntities(undefined);
   }
 
-  if (btnStart) btnStart.disabled = active;
+  if (btnStart) btnStart.disabled = active || !(consentCheckbox?.checked ?? false);
 }
 
 async function downloadFromResponse(res: ExportZipResponse): Promise<void> {
@@ -155,6 +156,10 @@ btnStart?.addEventListener("click", async () => {
     showStartError(err instanceof Error ? err.message : "Could not start capture");
     await refresh();
   }
+});
+
+consentCheckbox?.addEventListener("change", () => {
+  if (btnStart) btnStart.disabled = !consentCheckbox.checked;
 });
 
 let captureActive = false;
