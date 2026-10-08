@@ -10,6 +10,7 @@ import type { SessionData } from "../shared/types.js";
 
 /** Redact export data again at the boundary. */
 export async function processSessionForExport(data: SessionData): Promise<SessionData> {
+  if (data.session?.options?.redactionEnabled === false) return data;
   const redacted = redactDeep(data);
   return {
     ...redacted,

@@ -3,11 +3,14 @@ export interface CaptureOptions {
   captureBodies: boolean;
   /** Capture browser console, runtime exception, and log events. */
   captureConsole: boolean;
+  /** Redact sensitive values before persistence and export. */
+  redactionEnabled: boolean;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   captureBodies: false,
   captureConsole: true,
+  redactionEnabled: true,
 };
 
 export interface NavigationEntry {
@@ -202,7 +205,7 @@ export interface ExportManifest {
   extensionVersion: string;
   sessionId: string;
   exportedAt: number;
-  privacy: { localOnly: true; remoteUpload: false };
+  privacy: { localOnly: true; remoteUpload: false; redactionEnabled: boolean };
   options: CaptureOptions;
   files: ArtifactManifestEntry[];
   coverage: CoverageReport;

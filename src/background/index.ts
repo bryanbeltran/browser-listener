@@ -20,11 +20,11 @@ import {
   clearSessionData,
   readSessionData,
 } from "../persistence/store.js";
+import { readRedactionPreference, setRedactionPreference } from "../persistence/preferences.js";
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
 import type { CaptureOptions } from "../shared/types.js";
-import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 import { isCaptureableUrl } from "../shared/urls.js";
 
 async function startWithConsent(
@@ -35,8 +35,7 @@ async function startWithConsent(
   if (!isCaptureableUrl(tab.url)) {
     throw new Error("Open a regular web page before starting capture");
   }
-  const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
-  await createSession(tabId, tab.url, merged);
+  await createSession(tabId, tab.url, options);
   try {
     await attachDebugger(tabId);
     if (!isDebuggerAttachedToTab(tabId)) {
@@ -87,6 +86,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message?.type) {
       case MessageType.GET_STATE: {
         const data = await readSessionData();
+        const redactionEnabled = await readRedactionPreference();
         const hasData = data.network.length > 0 || data.navigation.length > 0 || data.console.length > 0;
         return {
           session: data.session,
@@ -96,7 +96,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             console: data.console.length,
           },
           canExport: !data.session?.active && hasData,
+          redactionEnabled,
         };
+      }
+      case MessageType.SET_REDACTION: {
+        if (await getActiveSession()) {
+          return { ok: false, error: "Stop capture before changing redaction" };
+        }
+        const redactionEnabled = message.redactionEnabled !== false;
+        await setRedactionPreference(redactionEnabled);
+        return { ok: true, redactionEnabled };
       }
       case MessageType.CONSENT_AND_START: {
         const tabId = message.tabId as number | undefined;

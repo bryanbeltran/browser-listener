@@ -7,13 +7,16 @@ import type { PopupStateResponse } from "../shared/messages.js";
 import type { SessionData } from "../shared/types.js";
 
 export function popupStateFromSessionData(data: SessionData): PopupStateResponse {
-  return popupStateFromSnapshot(
-    buildPopupStateSnapshot(data.session, {
-      network: data.network.length,
-      navigation: data.navigation.length,
-      console: data.console.length,
-    }),
-  );
+  return {
+    ...popupStateFromSnapshot(
+      buildPopupStateSnapshot(data.session, {
+        network: data.network.length,
+        navigation: data.navigation.length,
+        console: data.console.length,
+      }),
+    ),
+    redactionEnabled: data.session?.options?.redactionEnabled !== false,
+  };
 }
 
 /** Read capture UI state; reconciles popup snapshot with session meta. */

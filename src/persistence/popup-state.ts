@@ -40,7 +40,10 @@ export function buildPopupStateSnapshot(
   };
 }
 
-export function popupStateFromSnapshot(snapshot: PopupStateSnapshot): PopupStateResponse {
+export function popupStateFromSnapshot(
+  snapshot: PopupStateSnapshot,
+  redactionEnabled = true,
+): PopupStateResponse {
   return {
     session: snapshot.session,
     counts: {
@@ -49,5 +52,6 @@ export function popupStateFromSnapshot(snapshot: PopupStateSnapshot): PopupState
       console: snapshot.counts?.console ?? 0,
     },
     canExport: snapshot.canExport,
+    redactionEnabled,
   };
 }

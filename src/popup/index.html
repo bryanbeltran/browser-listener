@@ -23,7 +23,7 @@
       <p class="intro-text">
         Capture a browser problem you are authorized to collect and export a searchable evidence bundle.
         Everything stays on this device — no upload, no telemetry. Sensitive headers, cookies, and
-        tokens are redacted. Body capture stays off unless you opt in.
+        tokens are redacted by default. Body capture stays off unless you opt in.
       </p>
       <label class="checkbox">
         <input type="checkbox" id="consent-checkbox" />
@@ -33,6 +33,13 @@
         <input type="checkbox" id="body-capture-checkbox" />
         <span>Include safe JSON/text bodies (bounded; may contain page content).</span>
       </label>
+      <label class="checkbox">
+        <input type="checkbox" id="redaction-checkbox" checked />
+        <span>Redact secrets and sensitive values (recommended).</span>
+      </label>
+      <p id="redaction-warning" class="hint warning hidden" role="alert">
+        Redaction is disabled. Exported HAR and console data may contain secrets.
+      </p>
       <button type="button" id="btn-start" class="primary" disabled>Start capture</button>
       <p id="start-error" class="hint error hidden" role="alert"></p>
     </section>

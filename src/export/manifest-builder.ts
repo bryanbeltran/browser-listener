@@ -24,7 +24,11 @@ export function buildExportManifest(
     extensionVersion,
     sessionId: data.session?.id ?? "none",
     exportedAt: Date.now(),
-    privacy: { localOnly: true, remoteUpload: false },
+    privacy: {
+      localOnly: true,
+      remoteUpload: false,
+      redactionEnabled: data.session?.options?.redactionEnabled !== false,
+    },
     options: data.session?.options ?? DEFAULT_CAPTURE_OPTIONS,
     files,
     coverage,

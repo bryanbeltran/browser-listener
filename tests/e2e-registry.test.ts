@@ -9,6 +9,7 @@ export const E2E_COVERAGE_REGISTRY = [
   "zip_export_manifest",
   "offline_html_report",
   "privacy_redaction_regression",
+  "redaction_preference_persistence",
   "automated_export_pipeline",
 ] as const;
 
@@ -16,6 +17,7 @@ describe("E2E category coverage registry", () => {
   it("lists required categories", () => {
     expect(E2E_COVERAGE_REGISTRY.length).toBeGreaterThanOrEqual(6);
     expect(E2E_COVERAGE_REGISTRY).toContain("privacy_redaction_regression");
+    expect(E2E_COVERAGE_REGISTRY).toContain("redaction_preference_persistence");
     expect(E2E_COVERAGE_REGISTRY).toContain("start_stop_export_flow");
   });
 });

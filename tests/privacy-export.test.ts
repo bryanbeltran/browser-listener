@@ -26,5 +26,16 @@ describe("privacy export regression", () => {
     expect(combined).toContain(REDACTED);
     expect(files["export-manifest.json"]).toContain('"localOnly": true');
     expect(files["export-manifest.json"]).toContain('"remoteUpload": false');
+    expect(files["export-manifest.json"]).toContain('"redactionEnabled": true');
+  });
+
+  it("exports raw values only after explicit redaction opt-out", async () => {
+    const data = leakySessionData();
+    data.session!.options.redactionEnabled = false;
+    const files = unzipToMap(await buildZipFromSessionData(data));
+
+    expect(files["raw.har"]).toContain("Bearer eyJhbG.secret.payload");
+    expect(files["raw-console.json"]).toContain("hunter2");
+    expect(files["export-manifest.json"]).toContain('"redactionEnabled": false');
   });
 });

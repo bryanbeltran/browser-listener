@@ -9,6 +9,7 @@ import {
 } from "../persistence/store.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { isCaptureableUrl } from "../shared/urls.js";
+import { readRedactionPreference } from "../persistence/preferences.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -29,6 +30,7 @@ export async function createSession(
   tabUrl: string | undefined,
   options: Partial<CaptureOptions> = {},
 ): Promise<CaptureSession> {
+  const redactionEnabled = await readRedactionPreference();
   const session: CaptureSession = {
     id: crypto.randomUUID(),
     active: false,
@@ -37,7 +39,7 @@ export async function createSession(
     tabId,
     tabUrl,
     extensionVersion: getExtensionVersion(),
-    options: { ...DEFAULT_CAPTURE_OPTIONS, ...options },
+    options: { ...DEFAULT_CAPTURE_OPTIONS, ...options, redactionEnabled },
     health: newHealth(),
   };
   await clearSessionData();

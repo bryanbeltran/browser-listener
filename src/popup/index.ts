@@ -3,6 +3,7 @@ import type { ExportEntityCounts, ExportZipResponse } from "../shared/messages.j
 import { base64ToUint8 } from "../shared/bytes.js";
 import { downloadZipFromPage } from "../export/download.js";
 import { hasTruncation } from "../persistence/limits.js";
+import { REDACTION_PREFERENCE_KEY } from "../persistence/preferences.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import { readPopupState } from "./popup-state.js";
 import { sendMessageWithTimeout } from "./messaging.js";
@@ -11,6 +12,7 @@ const EMPTY_STATE: PopupStateResponse = {
   session: null,
   counts: { network: 0, navigation: 0, console: 0 },
   canExport: false,
+  redactionEnabled: true,
 };
 
 function el<T extends HTMLElement>(id: string): T | null {
@@ -24,6 +26,8 @@ const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
 const bodyCaptureCheckbox = el<HTMLInputElement>("body-capture-checkbox");
+const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
+const redactionWarning = el("redaction-warning");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
@@ -120,6 +124,11 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   setText(eNetwork, String(state.counts.network));
   setText(eNavigation, String(state.counts.navigation));
   setText(eConsole, String(state.counts.console));
+  if (redactionCheckbox) {
+    redactionCheckbox.checked = state.redactionEnabled;
+    redactionCheckbox.disabled = active || canExport;
+  }
+  redactionWarning?.classList.toggle("hidden", state.redactionEnabled);
 
   if (active && state.session) {
     setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
@@ -226,17 +235,36 @@ async function refresh(): Promise<void> {
     render(state, true);
   } catch {
     captureActive = false;
-    render({ session: null, counts: EMPTY_STATE.counts, canExport: false }, true);
+    render({ ...EMPTY_STATE, session: null }, true);
     setText(healthHint, "Could not read session storage");
   }
 }
+
+redactionCheckbox?.addEventListener("change", async () => {
+  const enabled = redactionCheckbox.checked;
+  redactionCheckbox.disabled = true;
+  showStartError("");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.SET_REDACTION, redactionEnabled: enabled },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not save redaction preference");
+    await refresh();
+  } catch (err) {
+    redactionCheckbox.checked = !enabled;
+    showStartError(err instanceof Error ? err.message : "Could not save redaction preference");
+    redactionCheckbox.disabled = false;
+  }
+});
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (
     changes.browserListenerPopupState ||
     changes.browserListenerSessionData ||
-    changes.browserListenerActiveSessionId
+    changes.browserListenerActiveSessionId ||
+    changes[REDACTION_PREFERENCE_KEY]
   ) {
     void refresh();
   }

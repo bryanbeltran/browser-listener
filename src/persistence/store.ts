@@ -20,6 +20,10 @@ import {
   putNetworkEntries,
   upsertNetworkEntry as idbUpsertNetworkEntry,
 } from "./network-store.js";
+import {
+  DEFAULT_REDACTION_ENABLED,
+  REDACTION_PREFERENCE_KEY,
+} from "./preferences.js";
 import type {
   CaptureSession,
   ConsoleEntry,
@@ -97,6 +101,7 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
     options: {
       captureBodies: session.options?.captureBodies ?? false,
       captureConsole: session.options?.captureConsole ?? true,
+      redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
     },
     health: normalizeHealth(session),
   };
@@ -119,6 +124,10 @@ function normalizeSessionData(data: Partial<SessionData>): SessionData {
   };
 }
 
+function shouldRedact(session: CaptureSession | null): boolean {
+  return session?.options?.redactionEnabled !== false;
+}
+
 async function readPersistedMeta(): Promise<PersistedSessionMeta> {
   const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
   const persisted = raw[STORAGE_KEY] as PersistedSessionMeta | SessionData | undefined;
@@ -136,8 +145,10 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
   }
 
   if (isLegacySessionData(persisted) && session?.id && persisted.network.length > 0) {
-    const migratedBytes = totalNetworkBytes(persisted.network);
-    const result = await putNetworkEntries(session.id, persisted.network, migratedBytes);
+    const network = session.options.redactionEnabled === false
+      ? persisted.network
+      : persisted.network.map((entry) => redactDeep(entry));
+    const result = await putNetworkEntries(session.id, network, totalNetworkBytes(network));
     if (result.truncated > 0 && session) {
       session = bumpTruncation(session, { network: result.truncated });
     }
@@ -156,7 +167,12 @@ export async function readSessionMeta(): Promise<CaptureSession | null> {
 async function writePersistedMeta(meta: PersistedSessionMeta): Promise<void> {
   const session = meta.session ? { ...meta.session, health: normalizeHealth(meta.session) } : null;
   await chrome.storage.local.set({
-    [STORAGE_KEY]: { session: session ? redactDeep(session) : null },
+    [STORAGE_KEY]: {
+      session:
+        session && session.options?.redactionEnabled !== false
+          ? redactDeep(session)
+          : session,
+    },
   });
 }
 
@@ -166,11 +182,16 @@ async function readEvidence(sessionId: string): Promise<PersistedEvidence> {
   return normalizeEvidence(map[sessionId]);
 }
 
-async function writeEvidence(sessionId: string, evidence: PersistedEvidence): Promise<void> {
+async function writeEvidence(
+  sessionId: string,
+  evidence: PersistedEvidence,
+  redact = true,
+): Promise<void> {
   const raw = await chrome.storage.local.get(EVIDENCE_KEY);
   const map = (raw[EVIDENCE_KEY] as PersistedEvidenceMap | undefined) ?? {};
   map[sessionId] = {
     navigation: evidence.navigation.map((entry) => {
+      if (!redact) return entry;
       const safe = redactDeep(entry);
       return {
         ...safe,
@@ -178,6 +199,7 @@ async function writeEvidence(sessionId: string, evidence: PersistedEvidence): Pr
       };
     }),
     console: evidence.console.map((entry) => {
+      if (!redact) return entry;
       const safe = redactDeep(entry);
       return {
         ...safe,
@@ -328,6 +350,7 @@ export async function readSessionData(): Promise<SessionData> {
 export async function writeSessionData(data: SessionData): Promise<SessionData> {
   const normalized = normalizeSessionData(data);
   const session = normalized.session;
+  const redact = shouldRedact(session);
   let truncated = 0;
   const navigation = normalized.navigation.slice(-AUXILIARY_STORAGE_LIMITS.navigationEntries);
   const consoleEntries = normalized.console.slice(-AUXILIARY_STORAGE_LIMITS.consoleEntries);
@@ -336,14 +359,16 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
 
   if (session?.id && normalized.network.length > 0) {
     const stats = await loadCaptureStats(session.id);
-    const redactedNetwork = normalized.network.map((entry) => redactDeep(entry));
-    const result = await putNetworkEntries(session.id, redactedNetwork, stats.bytes);
+    const storedNetwork = redact
+      ? normalized.network.map((entry) => redactDeep(entry))
+      : normalized.network;
+    const result = await putNetworkEntries(session.id, storedNetwork, stats.bytes);
     truncated = result.truncated;
     applyEvictedEntries(session.id, result.evicted);
   }
 
   if (session?.id) {
-    await writeEvidence(session.id, { navigation, console: consoleEntries });
+    await writeEvidence(session.id, { navigation, console: consoleEntries }, redact);
   }
 
   const sessionToStore =
@@ -403,9 +428,12 @@ export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
 /** Reconcile popup snapshot with session meta + active flag without loading network bodies. */
 export async function readPopupStateForUi(): Promise<PopupStateResponse> {
   const snapshot = await readPopupStateSnapshot();
-  const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
+  const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG, REDACTION_PREFERENCE_KEY]);
   const persisted = raw[STORAGE_KEY] as PersistedSessionMeta | SessionData | undefined;
   const activeId = (raw[ACTIVE_FLAG] as string | null) ?? null;
+  const storedRedaction = raw[REDACTION_PREFERENCE_KEY];
+  const redactionEnabled =
+    storedRedaction == null ? DEFAULT_REDACTION_ENABLED : storedRedaction !== false;
 
   let session = normalizeSession(
     isLegacySessionData(persisted) ? persisted.session : (persisted?.session ?? null),
@@ -414,19 +442,19 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
     session = { ...session, active: Boolean(activeId && session.id === activeId) };
   }
 
-  if (!session) return popupStateFromSnapshot(snapshot);
+  if (!session) return popupStateFromSnapshot(snapshot, redactionEnabled);
 
   const snapshotActive = snapshot.session?.active ?? false;
   const snapshotId = snapshot.session?.id;
   if (session.active !== snapshotActive || session.id !== snapshotId) {
-    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts));
+    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled);
   }
 
   if (popupHealthStale(snapshot, session)) {
-    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts));
+    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled);
   }
 
-  return popupStateFromSnapshot(snapshot);
+  return popupStateFromSnapshot(snapshot, redactionEnabled);
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
@@ -531,10 +559,10 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   const meta = await readPersistedMeta();
   if (!meta.session?.active) return;
 
-  const redacted = redactDeep(entry);
+  const stored = shouldRedact(meta.session) ? redactDeep(entry) : entry;
   const stats = await loadCaptureStats(meta.session.id);
-  const result = await idbUpsertNetworkEntry(meta.session.id, redacted, stats.bytes);
-  const nextStats = applyEntryStats(meta.session.id, redacted, result.previous, result.isNew);
+  const result = await idbUpsertNetworkEntry(meta.session.id, stored, stats.bytes);
+  const nextStats = applyEntryStats(meta.session.id, stored, result.previous, result.isNew);
   applyEvictedEntries(meta.session.id, result.evicted);
 
   let session = meta.session;
@@ -560,8 +588,9 @@ async function appendBoundedEvidenceNow(
 
   const evidence = await readEvidence(entry.sessionId);
   const truncation = emptyTruncation();
-  const safeEntry = redactDeep(entry) as NavigationEntry | ConsoleEntry;
-  if (kind === "console") {
+  const redact = shouldRedact(meta.session);
+  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry;
+  if (redact && kind === "console") {
     const consoleEntry = safeEntry as ConsoleEntry;
     consoleEntry.text = redactSensitiveString(consoleEntry.text);
     consoleEntry.stackTrace = consoleEntry.stackTrace
@@ -587,7 +616,7 @@ async function appendBoundedEvidenceNow(
     );
   }
 
-  await writeEvidence(entry.sessionId, evidence);
+  await writeEvidence(entry.sessionId, evidence, redact);
   const truncated = truncation[kind];
   if (truncated > 0) {
     await patchSession((session) =>

@@ -42,13 +42,13 @@ function truncateUtf8(text: string, maxBytes: number): { text: string; truncated
   };
 }
 
-export function prepareBodyForStorage(raw: string): {
+export function prepareBodyForStorage(raw: string, redact = true): {
   text: string;
   byteLength: number;
   truncated: boolean;
 } {
-  const redacted = redactBodyText(raw);
-  const limited = truncateUtf8(redacted, BODY_CAPTURE_LIMITS.perResponseBytes);
+  const preparedText = redact ? redactBodyText(raw) : raw;
+  const limited = truncateUtf8(preparedText, BODY_CAPTURE_LIMITS.perResponseBytes);
   return {
     text: limited.text,
     byteLength: new TextEncoder().encode(limited.text).byteLength,
@@ -110,6 +110,7 @@ export async function captureBodiesForRequest(
 ): Promise<Partial<NetworkEntry>> {
   const session = await getActiveSession();
   if (!session?.options.captureBodies) return {};
+  const redact = session.options.redactionEnabled !== false;
 
   const patch: Partial<NetworkEntry> = {};
   let totalBytes = 0;
@@ -122,7 +123,7 @@ export async function captureBodiesForRequest(
         requestId,
       })) as { postData?: string };
       if (req.postData) {
-        const prepared = prepareBodyForStorage(req.postData);
+        const prepared = prepareBodyForStorage(req.postData, redact);
         patch.requestBody = prepared.text;
         patch.requestBodyTruncated = prepared.truncated;
         patch.requestBodySize = prepared.byteLength;
@@ -140,7 +141,7 @@ export async function captureBodiesForRequest(
       const res = (await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", {
         requestId,
       })) as { body: string; base64Encoded: boolean };
-      const prepared = prepareBodyForStorage(decodeCdpBody(res.body, res.base64Encoded));
+      const prepared = prepareBodyForStorage(decodeCdpBody(res.body, res.base64Encoded), redact);
       patch.responseBody = prepared.text;
       patch.responseBodyTruncated = prepared.truncated;
       patch.responseBodySize = prepared.byteLength;

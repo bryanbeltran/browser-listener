@@ -35,6 +35,11 @@ describe("safe body capture", () => {
     expect(huge.byteLength).toBeLessThanOrEqual(BODY_CAPTURE_LIMITS.perResponseBytes);
   });
 
+  it("preserves body values only when redaction is explicitly disabled", () => {
+    const raw = prepareBodyForStorage('{"token":"secret-token-value"}', false);
+    expect(raw.text).toContain("secret-token-value");
+  });
+
   it("decodes base64 CDP bodies", () => {
     expect(decodeCdpBody(btoa('{"ok":true}'), true)).toBe('{"ok":true}');
     expect(decodeCdpBody("plain", false)).toBe("plain");

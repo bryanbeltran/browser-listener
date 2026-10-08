@@ -31,6 +31,7 @@ describe("E2E export pipeline", () => {
     const rawConsole = JSON.parse(files["raw-console.json"]);
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
+    expect(manifest.privacy.redactionEnabled).toBe(true);
     expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(REQUIRED_FILES);
     expect(manifest.schemaVersion).toBe(2);
     expect(manifest.coverage.schemaVersion).toBe(1);

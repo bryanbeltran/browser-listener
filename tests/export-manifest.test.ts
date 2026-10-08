@@ -18,6 +18,7 @@ describe("export manifest", () => {
     const manifest = buildExportManifest(data);
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
+    expect(manifest.privacy.redactionEnabled).toBe(true);
     expect(manifest.version).toBe("0.3.21");
     expect(manifest.extensionVersion).toBe("0.3.21");
     expect(manifest.schemaVersion).toBe(2);

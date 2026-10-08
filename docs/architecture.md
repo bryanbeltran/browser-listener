@@ -22,7 +22,7 @@ flowchart LR
 |--------|----------------|
 | `capture/` | Session lifecycle, debugger attach/recovery, safe body policy, stop/export |
 | `background/` | MV3 service-worker entrypoint and captured-tab lifecycle |
-| `persistence/` | Session metadata, bounded auxiliary evidence, IndexedDB network store, caps |
+| `persistence/` | Session metadata, preferences, bounded auxiliary evidence, IndexedDB network store, caps |
 | `redaction/` | Default-deny headers, cookies, URL parameters, body values, and custom rules |
 | `export/` | HAR, coverage, manifest, and four-file ZIP orchestration |
 | `report/` | Searchable offline timeline and health report |
@@ -47,7 +47,7 @@ There is no broad host monitoring or request interception fallback. CDP is autho
 - Each body is capped at 256 KiB. Total body storage is capped at 4 MiB per session.
 - Every eviction or auxiliary overflow increments `session.health.truncation`.
 
-Redaction runs before persistence and again at export. Body text is parsed as JSON or form data when possible, then bounded. Headers and sensitive URL parameters are always redacted.
+Redaction is enabled by default before persistence and again at export. Body text is parsed as JSON or form data when possible, then bounded. Headers and sensitive URL parameters are redacted while the preference is enabled. The preference is stored under `browserListenerRedactionEnabled` in `chrome.storage.local`; missing values normalize to enabled. A capture snapshots redaction state in session options, so storage and every export artifact use one consistent policy. Opt-out is explicit in the popup and displays a warning because raw HAR bodies and console records can contain secrets.
 
 ## Export contract
 
@@ -60,7 +60,7 @@ raw-console.json
 export-manifest.json
 ```
 
-`raw.har` is a redacted HAR 1.2 log. `raw-console.json` stores redacted console, runtime exception, and browser log records. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, enabled capture options, coverage, truncation, persistence errors, and debugger gaps.
+`raw.har` is a HAR 1.2 log redacted by default. `raw-console.json` stores console, runtime exception, and browser log records redacted by default. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, redaction state, enabled capture options, coverage, truncation, persistence errors, and debugger gaps.
 
 ## Reliability
 

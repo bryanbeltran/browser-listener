@@ -26,6 +26,7 @@ describe("popup state", () => {
     expect(state.session?.active).toBe(true);
     expect(state.counts.network).toBe(1);
     expect(state.canExport).toBe(false);
+    expect(state.redactionEnabled).toBe(true);
   });
 
   it("readPopupState avoids loading network bodies from storage", async () => {
@@ -58,7 +59,16 @@ describe("popup state", () => {
     expect(getSpy.mock.calls[1]?.[0]).toEqual([
       "browserListenerSessionData",
       "browserListenerActiveSessionId",
+      "browserListenerRedactionEnabled",
     ]);
+  });
+
+  it("reads persisted redaction preference for popup state", async () => {
+    await chrome.storage.local.set({ browserListenerRedactionEnabled: false });
+    const { readPopupState } = await import("../src/popup/popup-state.js");
+
+    const state = await readPopupState();
+    expect(state.redactionEnabled).toBe(false);
   });
 
   it("popupStateFromSessionData sets canExport when stopped with network data", () => {
