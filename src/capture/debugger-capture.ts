@@ -124,6 +124,15 @@ function eventTimestamp(value: unknown): number {
   return value > 1_000_000_000_000 ? value : value * 1000;
 }
 
+function completedTiming(entry: NetworkEntry, end: number): NetworkEntry["timing"] {
+  const start = entry.timing?.start ?? entry.timestamp;
+  return {
+    start,
+    end,
+    durationMs: Math.max(0, end - start),
+  };
+}
+
 function remoteObjectText(value: unknown): string {
   const object = value as
     | { value?: unknown; unserializableValue?: string; description?: string; type?: string }
@@ -240,17 +249,19 @@ async function onDebuggerEvent(
       | { url?: string; method?: string; headers?: Record<string, string> }
       | undefined;
     const requestId = String(p.requestId ?? "");
+    const requestTimestamp = typeof p.wallTime === "number" ? eventTimestamp(p.wallTime) : Date.now();
     pendingCdp.set(requestId, {
       id: crypto.randomUUID(),
       sessionId: session.id,
       requestId,
-      timestamp: typeof p.wallTime === "number" ? eventTimestamp(p.wallTime) : Date.now(),
+      timestamp: requestTimestamp,
       url: request?.url ?? "",
       method: request?.method ?? "GET",
       type: String(p.type ?? "other"),
       tabId: source.tabId,
       frameId: p.frameId != null ? String(p.frameId) : undefined,
       requestHeaders: request?.headers,
+      timing: { start: requestTimestamp },
     });
   }
 
@@ -265,13 +276,14 @@ async function onDebuggerEvent(
         }
       | undefined;
     const base = pendingCdp.get(requestId) ?? { requestId, sessionId: session.id };
+    const responseTimestamp = Date.now();
     const contentType = response?.mimeType ?? Object.entries(response?.headers ?? {}).find(([key]) => key.toLowerCase() === "content-type")?.[1];
     const entry: NetworkEntry = {
       ...(base as NetworkEntry),
       id: base.id ?? crypto.randomUUID(),
       sessionId: session.id,
       requestId,
-      timestamp: Date.now(),
+      timestamp: responseTimestamp,
       url: (base as NetworkEntry).url ?? "",
       method: (base as NetworkEntry).method ?? "GET",
       type: (base as NetworkEntry).type ?? "other",
@@ -281,6 +293,7 @@ async function onDebuggerEvent(
       contentType,
       tabId: source.tabId,
     };
+    entry.timing = completedTiming(entry, responseTimestamp);
     pendingCdp.set(requestId, entry);
     await upsertNetwork(entry);
   }
@@ -289,11 +302,13 @@ async function onDebuggerEvent(
     const requestId = String(p.requestId ?? "");
     const pending = pendingCdp.get(requestId);
     if (pending) {
-      await upsertNetwork({
+      const failed = {
         ...(pending as NetworkEntry),
         sessionId: session.id,
         error: String(p.errorText ?? "network loading failed"),
-      });
+      };
+      failed.timing = completedTiming(failed, Date.now());
+      await upsertNetwork(failed);
     }
   }
 
@@ -303,9 +318,12 @@ async function onDebuggerEvent(
     if (!pending?.url || source.tabId == null) return;
     const base = pending as NetworkEntry;
     const job = (async () => {
-      const bodies = await captureBodiesForRequest(source.tabId as number, requestId, base);
+      const completed: NetworkEntry = { ...base, timing: completedTiming(base, Date.now()) };
+      pendingCdp.set(requestId, completed);
+      await upsertNetwork(completed);
+      const bodies = await captureBodiesForRequest(source.tabId as number, requestId, completed);
       if (Object.keys(bodies).length === 0) return;
-      const updated: NetworkEntry = { ...base, ...bodies };
+      const updated: NetworkEntry = { ...completed, ...bodies };
       pendingCdp.set(requestId, updated);
       await upsertNetwork(updated);
     })();
