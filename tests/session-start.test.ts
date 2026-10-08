@@ -104,6 +104,16 @@ describe("session start", () => {
       allowedOrigins: ["https://example.test/"],
     });
     expect(session.options.allowedOrigins).toEqual(["https://example.test"]);
+    expect(session.policyEpochs).toHaveLength(1);
+    expect(session.policyEpochs?.[0]).toMatchObject({
+      profile: "network-console",
+      redactionEnabled: true,
+      allowedOrigins: ["https://example.test"],
+      budgets: {
+        perOriginBytes: 32 * 1024 * 1024,
+        perCategoryBytes: 64 * 1024 * 1024,
+      },
+    });
   });
 
   it("rejects malformed origin policy before clearing existing evidence", async () => {

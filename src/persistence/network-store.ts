@@ -7,9 +7,15 @@ const STORE = "network_entries";
 
 export interface UpsertNetworkResult {
   truncated: number;
+  fairBudgetEvicted: number;
   isNew: boolean;
   previous: NetworkEntry | null;
   evicted: NetworkEntry[];
+}
+
+export interface NetworkFairBudgets {
+  perOriginBytes?: number;
+  perCategoryBytes?: number;
 }
 
 function idb(): IDBFactory {
@@ -138,6 +144,57 @@ async function deleteOldestEntry(sessionId: string): Promise<NetworkEntry | null
   });
 }
 
+async function deleteEntry(entryId: string): Promise<NetworkEntry | null> {
+  return withStore("readwrite", async (store) => {
+    const entry = (await requestToPromise(store.get(entryId))) as NetworkEntry | undefined;
+    if (!entry) return null;
+    await requestToPromise(store.delete(entryId));
+    return entry;
+  });
+}
+
+function originKey(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "<opaque>";
+  }
+}
+
+function categoryKey(entry: NetworkEntry): string {
+  return entry.type?.trim().toLowerCase() || "other";
+}
+
+function oldestFairCandidate(
+  entries: NetworkEntry[],
+  budgets: NetworkFairBudgets | undefined,
+): NetworkEntry | null {
+  if (!budgets || entries.length === 0) return null;
+  const originBytes = new Map<string, number>();
+  const categoryBytes = new Map<string, number>();
+  for (const entry of entries) {
+    const bytes = estimateNetworkEntryBytes(entry);
+    originBytes.set(originKey(entry.url), (originBytes.get(originKey(entry.url)) ?? 0) + bytes);
+    categoryBytes.set(categoryKey(entry), (categoryBytes.get(categoryKey(entry)) ?? 0) + bytes);
+  }
+  const violatingOrigins = new Set<string>();
+  const violatingCategories = new Set<string>();
+  if (budgets.perOriginBytes != null) {
+    for (const [origin, bytes] of originBytes) {
+      if (bytes > budgets.perOriginBytes) violatingOrigins.add(origin);
+    }
+  }
+  if (budgets.perCategoryBytes != null) {
+    for (const [category, bytes] of categoryBytes) {
+      if (bytes > budgets.perCategoryBytes) violatingCategories.add(category);
+    }
+  }
+  if (!violatingOrigins.size && !violatingCategories.size) return null;
+  return [...entries]
+    .filter((entry) => violatingOrigins.has(originKey(entry.url)) || violatingCategories.has(categoryKey(entry)))
+    .sort((left, right) => left.timestamp - right.timestamp || left.id.localeCompare(right.id))[0] ?? null;
+}
+
 function projectedByteEstimate(
   byteEstimate: number | undefined,
   entries: { entry: NetworkEntry; previous: NetworkEntry | null; isNew: boolean }[],
@@ -155,35 +212,42 @@ function projectedByteEstimate(
 async function enforceSessionLimits(
   sessionId: string,
   byteEstimate?: number,
-): Promise<{ truncated: number; evicted: NetworkEntry[] }> {
+  fairBudgets?: NetworkFairBudgets,
+): Promise<{ truncated: number; fairBudgetEvicted: number; evicted: NetworkEntry[] }> {
   const { byteBudget, entrySoftCap } = NETWORK_STORE_LIMITS;
   const evicted: NetworkEntry[] = [];
   let truncated = 0;
+  let fairBudgetEvicted = 0;
 
   let count = await countNetworkEntries(sessionId);
   let bytes = byteEstimate ?? 0;
   const checkBytes = byteEstimate != null;
+  let entries = fairBudgets ? await listNetworkEntries(sessionId) : [];
 
-  while (count > entrySoftCap || (checkBytes && bytes > byteBudget)) {
-    if (count <= entrySoftCap && (!checkBytes || bytes <= byteBudget)) break;
-    const deleted = await deleteOldestEntry(sessionId);
+  while (count > entrySoftCap || (checkBytes && bytes > byteBudget) || oldestFairCandidate(entries, fairBudgets) != null) {
+    const fairCandidate = oldestFairCandidate(entries, fairBudgets);
+    if (count <= entrySoftCap && (!checkBytes || bytes <= byteBudget) && !fairCandidate) break;
+    const deleted = fairCandidate ? await deleteEntry(fairCandidate.id) : await deleteOldestEntry(sessionId);
     if (!deleted) break;
     evicted.push(deleted);
     truncated += 1;
+    if (fairCandidate) fairBudgetEvicted += 1;
     count -= 1;
     if (checkBytes) bytes -= estimateNetworkEntryBytes(deleted);
+    if (entries.length) entries = entries.filter((entry) => entry.id !== deleted.id);
   }
 
-  return { truncated, evicted };
+  return { truncated, fairBudgetEvicted, evicted };
 }
 
 export async function putNetworkEntries(
   sessionId: string,
   entries: NetworkEntry[],
   byteEstimate?: number,
+  fairBudgets?: NetworkFairBudgets,
 ): Promise<UpsertNetworkResult> {
   if (!entries.length) {
-    return { truncated: 0, isNew: false, previous: null, evicted: [] };
+    return { truncated: 0, fairBudgetEvicted: 0, isNew: false, previous: null, evicted: [] };
   }
   let isNew = false;
   let previous: NetworkEntry | null = null;
@@ -198,17 +262,25 @@ export async function putNetworkEntries(
       await requestToPromise(store.put({ ...entry, sessionId }));
     }
   });
-  const { truncated, evicted } = await enforceSessionLimits(
+  const { truncated, fairBudgetEvicted, evicted } = await enforceSessionLimits(
     sessionId,
     projectedByteEstimate(byteEstimate, writes),
+    fairBudgets,
   );
-  return { truncated, isNew, previous, evicted };
+  return {
+    truncated,
+    fairBudgetEvicted,
+    isNew,
+    previous,
+    evicted,
+  };
 }
 
 export async function upsertNetworkEntry(
   sessionId: string,
   entry: NetworkEntry,
   byteEstimate?: number,
+  fairBudgets?: NetworkFairBudgets,
 ): Promise<UpsertNetworkResult> {
   let previous: NetworkEntry | null = null;
   let isNew = false;
@@ -217,11 +289,12 @@ export async function upsertNetworkEntry(
     isNew = !previous;
     await requestToPromise(store.put({ ...entry, sessionId }));
   });
-  const { truncated, evicted } = await enforceSessionLimits(
+  const { truncated, fairBudgetEvicted, evicted } = await enforceSessionLimits(
     sessionId,
     projectedByteEstimate(byteEstimate, [{ entry, previous, isNew }]),
+    fairBudgets,
   );
-  return { truncated, isNew, previous, evicted };
+  return { truncated, fairBudgetEvicted, isNew, previous, evicted };
 }
 
 export async function clearNetworkEntries(sessionId: string): Promise<void> {

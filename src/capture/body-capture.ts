@@ -2,7 +2,7 @@ import { patchSession, recordHealthGap } from "../persistence/store.js";
 import { BODY_CAPTURE_LIMITS } from "../persistence/limits.js";
 import { redactBodyText } from "../redaction/engine.js";
 import { getActiveSession } from "./session-manager.js";
-import type { NetworkEntry } from "../shared/types.js";
+import type { BodyEncoding, BodySkipReason, CoverageState, NetworkEntry } from "../shared/types.js";
 
 const SAFE_EXACT_MIME_TYPES = new Set([
   "application/json",
@@ -46,6 +46,7 @@ export function prepareBodyForStorage(raw: string, redact = true): {
   text: string;
   byteLength: number;
   truncated: boolean;
+  redacted: boolean;
 } {
   const preparedText = redact ? redactBodyText(raw) : raw;
   const limited = truncateUtf8(preparedText, BODY_CAPTURE_LIMITS.perResponseBytes);
@@ -53,6 +54,7 @@ export function prepareBodyForStorage(raw: string, redact = true): {
     text: limited.text,
     byteLength: new TextEncoder().encode(limited.text).byteLength,
     truncated: limited.truncated,
+    redacted: redact && preparedText !== raw,
   };
 }
 
@@ -115,28 +117,65 @@ export async function captureBodiesForRequest(
   const patch: Partial<NetworkEntry> = {};
   let totalBytes = 0;
   let truncated = false;
+  let capturedBody = false;
+  const capturedDirections: ("request" | "response")[] = [];
+
+  const setDecision = (
+    direction: "request" | "response",
+    state: CoverageState,
+    reason?: BodySkipReason,
+  ): void => {
+    if (direction === "request") {
+      patch.requestBodyState = state;
+      patch.requestBodySkipReason = reason;
+    } else {
+      patch.responseBodyState = state;
+      patch.responseBodySkipReason = reason;
+    }
+  };
+
+  const stateForBody = (prepared: { redacted: boolean; truncated: boolean }): CoverageState =>
+    prepared.truncated ? "truncated" : prepared.redacted ? "redacted" : "observed";
 
   const requestType = headerValue(entry.requestHeaders);
-  if (requestType && isSafeBodyMimeType(requestType)) {
+  if (!requestType) {
+    setDecision(
+      "request",
+      entry.method === "GET" || entry.method === "HEAD" ? "unavailable" : "excluded",
+      entry.method === "GET" || entry.method === "HEAD" ? "no-body" : "missing-mime-type",
+    );
+  } else if (!isSafeBodyMimeType(requestType)) {
+    setDecision("request", "excluded", "unsafe-mime-type");
+  } else {
     try {
       const req = (await chrome.debugger.sendCommand({ tabId }, "Network.getRequestPostData", {
         requestId,
       })) as { postData?: string };
-      if (req.postData) {
+      if (req.postData != null) {
         const prepared = prepareBodyForStorage(req.postData, redact);
         patch.requestBody = prepared.text;
         patch.requestBodyTruncated = prepared.truncated;
         patch.requestBodySize = prepared.byteLength;
+        patch.requestBodyEncoding = "utf-8" satisfies BodyEncoding;
+        setDecision("request", stateForBody(prepared), prepared.truncated ? "per-response-cap" : undefined);
         totalBytes += prepared.byteLength;
         truncated ||= prepared.truncated;
+        capturedBody = true;
+        capturedDirections.push("request");
+      } else {
+        setDecision("request", "unavailable", "no-body");
       }
     } catch {
-      /* GET or no post data */
+      setDecision("request", "unavailable", "body-unavailable");
     }
   }
 
   const responseType = entry.contentType ?? headerValue(entry.responseHeaders);
-  if (shouldCaptureBody(responseType)) {
+  if (!responseType) {
+    setDecision("response", "excluded", "missing-mime-type");
+  } else if (!shouldCaptureBody(responseType)) {
+    setDecision("response", "excluded", "unsafe-mime-type");
+  } else {
     try {
       const res = (await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", {
         requestId,
@@ -145,16 +184,34 @@ export async function captureBodiesForRequest(
       patch.responseBody = prepared.text;
       patch.responseBodyTruncated = prepared.truncated;
       patch.responseBodySize = prepared.byteLength;
+      patch.responseBodyEncoding = res.base64Encoded ? "base64" : "utf-8";
+      setDecision("response", stateForBody(prepared), prepared.truncated ? "per-response-cap" : undefined);
       patch.contentType = responseType;
       totalBytes += prepared.byteLength;
       truncated ||= prepared.truncated;
+      capturedBody = true;
+      capturedDirections.push("response");
     } catch (err) {
+      setDecision("response", "unavailable", "capture-error");
       void recordHealthGap(`body_capture_failed: ${(err as Error).message}`);
     }
   }
 
   if (truncated) await recordBodyTruncation();
-  if (totalBytes === 0) return {};
-  if (!(await tryReserveBodyBytes(totalBytes))) return {};
-  return { ...patch, bodyCaptured: true };
+  if (totalBytes > 0 && !(await tryReserveBodyBytes(totalBytes))) {
+    for (const direction of capturedDirections) {
+      if (direction === "request") {
+        patch.requestBody = undefined;
+        patch.requestBodySize = undefined;
+        patch.requestBodyTruncated = undefined;
+      } else {
+        patch.responseBody = undefined;
+        patch.responseBodySize = undefined;
+        patch.responseBodyTruncated = undefined;
+      }
+      setDecision(direction, "dropped", "session-budget");
+    }
+    return { ...patch, bodyCaptured: false };
+  }
+  return capturedBody ? { ...patch, bodyCaptured: true } : patch;
 }

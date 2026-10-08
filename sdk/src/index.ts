@@ -196,10 +196,10 @@ export function validateBundle(bundle: Bundle): ValidationResult {
     issues.push({ path, code, message, severity });
   };
   if (bundle.manifest.format !== "browser-listener") add("export-manifest.json.format", "format", "Unsupported bundle format");
-  if (![2, 3].includes(bundle.manifest.schemaVersion ?? -1)) {
+  if (![2, 3, 4].includes(bundle.manifest.schemaVersion ?? -1)) {
     add("export-manifest.json.schemaVersion", "schema", "Unsupported manifest schema version");
   }
-  if (bundle.manifest.coverage?.schemaVersion != null && ![1, 2, 3].includes(bundle.manifest.coverage.schemaVersion)) {
+  if (bundle.manifest.coverage?.schemaVersion != null && ![1, 2, 3, 4].includes(bundle.manifest.coverage.schemaVersion)) {
     add("export-manifest.json.coverage.schemaVersion", "schema", "Unsupported coverage schema version");
   }
   const listed = new Set((bundle.manifest.files ?? []).map((file) => file.path).filter((path): path is string => Boolean(path)));

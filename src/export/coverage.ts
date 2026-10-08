@@ -1,8 +1,91 @@
-import { captureProfileDefaults, inferCaptureProfile } from "../shared/types.js";
-import type { CoverageMetric, CoverageReport, SessionData } from "../shared/types.js";
+import { REDACTED } from "../redaction/engine.js";
+import {
+  captureProfileDefaults,
+  DEFAULT_CAPTURE_OPTIONS,
+  inferCaptureProfile,
+  normalizeCaptureBudgets,
+  policyEpochFromOptions,
+} from "../shared/types.js";
+import type {
+  BodySkipReason,
+  CoverageMetric,
+  CoverageReport,
+  CoverageState,
+  CoverageStateCounts,
+  CoverageStateSummary,
+  NetworkEntry,
+  SessionData,
+} from "../shared/types.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 
-export const COVERAGE_REPORT_SCHEMA_VERSION = 3 as const;
+export const COVERAGE_REPORT_SCHEMA_VERSION = 4 as const;
+
+const COVERAGE_STATES: CoverageState[] = [
+  "observed",
+  "excluded",
+  "redacted",
+  "truncated",
+  "unavailable",
+  "dropped",
+];
+
+function emptyStates(): CoverageStateCounts {
+  return Object.fromEntries(COVERAGE_STATES.map((state) => [state, 0])) as CoverageStateCounts;
+}
+
+function stateCounts(observed: number, dropped = 0, excluded = 0): CoverageStateCounts {
+  const counts = emptyStates();
+  counts.observed = observed;
+  counts.dropped = dropped;
+  counts.excluded = excluded;
+  return counts;
+}
+
+function bodyState(entry: NetworkEntry, direction: "request" | "response", captureBodies: boolean): CoverageState {
+  const state = direction === "request" ? entry.requestBodyState : entry.responseBodyState;
+  if (state) return state;
+  const body = direction === "request" ? entry.requestBody : entry.responseBody;
+  const truncated = direction === "request" ? entry.requestBodyTruncated : entry.responseBodyTruncated;
+  if (body == null) return captureBodies ? "unavailable" : "excluded";
+  if (truncated) return "truncated";
+  if (body.includes(REDACTED)) return "redacted";
+  return "observed";
+}
+
+function bodyStates(entries: NetworkEntry[], direction: "request" | "response", captureBodies: boolean): CoverageStateCounts {
+  const counts = emptyStates();
+  for (const entry of entries) counts[bodyState(entry, direction, captureBodies)] += 1;
+  return counts;
+}
+
+function summarizeStates(data: SessionData, captureBodies: boolean): CoverageStateSummary {
+  const health = data.session?.health;
+  const truncation = health?.truncation;
+  return {
+    network: stateCounts(
+      data.network.length,
+      truncation?.network ?? 0,
+      health?.filteredNetworkRequests ?? 0,
+    ),
+    navigation: stateCounts(data.navigation.length, truncation?.navigation ?? 0),
+    console: stateCounts(data.console.length, truncation?.console ?? 0),
+    markers: stateCounts(data.markers?.length ?? 0, truncation?.markers ?? 0),
+    bodies: {
+      request: bodyStates(data.network, "request", captureBodies),
+      response: bodyStates(data.network, "response", captureBodies),
+    },
+  };
+}
+
+function bodySkipReasons(network: NetworkEntry[]): Partial<Record<BodySkipReason, number>> {
+  const reasons: Partial<Record<BodySkipReason, number>> = {};
+  for (const entry of network) {
+    for (const reason of [entry.requestBodySkipReason, entry.responseBodySkipReason]) {
+      if (reason) reasons[reason] = (reasons[reason] ?? 0) + 1;
+    }
+  }
+  return reasons;
+}
 
 function metric(total: number, present: number): CoverageMetric {
   return {
@@ -29,6 +112,23 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
   const profile = inferCaptureProfile(data.session?.options);
   const profileOptions = captureProfileDefaults(profile);
   const hasExplicitProfile = data.session?.options?.profile != null;
+  const options = {
+    ...DEFAULT_CAPTURE_OPTIONS,
+    ...data.session?.options,
+    ...profileOptions,
+    profile,
+    captureBodies: hasExplicitProfile
+      ? profileOptions.captureBodies
+      : data.session?.options?.captureBodies ?? profileOptions.captureBodies,
+    captureConsole: hasExplicitProfile
+      ? profileOptions.captureConsole
+      : data.session?.options?.captureConsole ?? profileOptions.captureConsole,
+    budgets: normalizeCaptureBudgets(data.session?.options?.budgets),
+  };
+  const epochs = data.session?.policyEpochs?.length
+    ? data.session.policyEpochs
+    : [policyEpochFromOptions(options, `legacy-${data.session?.id ?? "none"}`, data.session?.startedAt ?? generatedAt, data.session?.stoppedAt)];
+  const states = summarizeStates(data, options.captureBodies);
   const gapReasons = [...new Set((health?.partialGaps ?? []).map((gap) => gap.reason))].sort();
   const truncation = health?.truncation;
   const partial = Boolean(
@@ -41,7 +141,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
           (truncation.markers ?? 0) > 0 ||
           (truncation.contextSnapshots ?? 0) > 0 ||
           (truncation.performanceSignals ?? 0) > 0)) ||
-      (health?.persistenceErrors.length ?? 0) > 0,
+      (health?.persistenceErrors.length ?? 0) > 0 ||
+      (health?.fairBudgetEvictions ?? 0) > 0,
   );
 
   return {
@@ -75,6 +176,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
         ? profileOptions.captureConsole
         : data.session?.options?.captureConsole ?? profileOptions.captureConsole,
       allowedOrigins: data.session?.options?.allowedOrigins ?? [],
+      budgets: options.budgets,
+      epochs,
     },
     totals: {
       network: network.length,
@@ -108,6 +211,7 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
         note: metric(markers.length, markers.filter((entry) => hasValue(entry.note)).length),
       },
     },
+    states,
     quality: {
       networkTruncated: health?.truncation.network ?? 0,
       navigationTruncated: health?.truncation.navigation ?? 0,
@@ -122,6 +226,8 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       contextSnapshotsTruncated: health?.truncation.contextSnapshots ?? 0,
       performanceSignalsTruncated: health?.truncation.performanceSignals ?? 0,
       filteredNetworkRequests: health?.filteredNetworkRequests ?? 0,
+      fairBudgetEvictions: health?.fairBudgetEvictions ?? 0,
+      bodySkipReasons: bodySkipReasons(network),
       partial,
       gapReasons,
     },

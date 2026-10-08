@@ -4,7 +4,8 @@ These schemas describe the stable, machine-readable contract consumed by the ins
 
 ## Compatibility
 
-- Manifest schema `3` and coverage schema `3` are the current export contract.
+- Manifest schema `4` and coverage schema `4` are the current export contract.
+- Version `3` manifests and coverage reports remain readable as legacy exports.
 - Version `2` manifests and coverage reports remain readable by the inspector as legacy current exports.
 - Consumers must ignore unknown optional fields and reject unsupported required schema versions.
 - Raw artifacts are immutable. A migration creates derived data; it never rewrites a source ZIP.

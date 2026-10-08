@@ -43,7 +43,9 @@ import type {
 import {
   captureProfileDefaults,
   inferCaptureProfile,
+  normalizeCaptureBudgets,
   normalizeCaptureProfile,
+  policyEpochFromOptions,
 } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import { normalizeOriginAllowlist } from "../shared/urls.js";
@@ -115,6 +117,7 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
     bodiesSkippedSessionCap: h.bodiesSkippedSessionCap,
     bodiesPerResponseTruncated: h.bodiesPerResponseTruncated,
     filteredNetworkRequests: h.filteredNetworkRequests,
+    fairBudgetEvictions: h.fairBudgetEvictions,
   };
 }
 
@@ -129,18 +132,28 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
   const profile = normalizeCaptureProfile(inferCaptureProfile(session.options));
   const profileDefaults = captureProfileDefaults(profile);
   const hasExplicitProfile = session.options?.profile != null;
+  const options = {
+    ...profileDefaults,
+    ...session.options,
+    profile,
+    captureBodies: hasExplicitProfile ? profileDefaults.captureBodies : session.options?.captureBodies ?? profileDefaults.captureBodies,
+    captureConsole: hasExplicitProfile ? profileDefaults.captureConsole : session.options?.captureConsole ?? profileDefaults.captureConsole,
+    redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
+    budgets: normalizeCaptureBudgets(session.options?.budgets),
+    ...(allowedOrigins == null ? {} : { allowedOrigins }),
+  };
+  const policyEpochs = session.policyEpochs?.length
+    ? session.policyEpochs.map((epoch) => ({
+        ...epoch,
+        allowedOrigins: [...(epoch.allowedOrigins ?? [])],
+        budgets: normalizeCaptureBudgets(epoch.budgets),
+      }))
+    : [policyEpochFromOptions(options, `legacy-${session.id}`, session.startedAt, session.stoppedAt)];
   return {
     ...session,
-    options: {
-      ...profileDefaults,
-      ...session.options,
-      profile,
-      captureBodies: hasExplicitProfile ? profileDefaults.captureBodies : session.options?.captureBodies ?? profileDefaults.captureBodies,
-      captureConsole: hasExplicitProfile ? profileDefaults.captureConsole : session.options?.captureConsole ?? profileDefaults.captureConsole,
-      redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
-      ...(allowedOrigins == null ? {} : { allowedOrigins }),
-    },
+    options,
     health: normalizeHealth(session),
+    policyEpochs,
   };
 }
 
@@ -407,7 +420,7 @@ export async function readSessionData(): Promise<SessionData> {
 
 export async function writeSessionData(data: SessionData): Promise<SessionData> {
   const normalized = normalizeSessionData(data);
-  const session = normalized.session;
+  let session = normalized.session;
   const redact = shouldRedact(session);
   let truncated = 0;
   const navigation = normalized.navigation.slice(-AUXILIARY_STORAGE_LIMITS.navigationEntries);
@@ -426,9 +439,23 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
     const storedNetwork = redact
       ? normalized.network.map((entry) => redactDeep(entry))
       : normalized.network;
-    const result = await putNetworkEntries(session.id, storedNetwork, stats.bytes);
+    const result = await putNetworkEntries(
+      session.id,
+      storedNetwork,
+      stats.bytes,
+      normalizeCaptureBudgets(session.options.budgets),
+    );
     truncated = result.truncated;
     applyEvictedEntries(session.id, result.evicted);
+    if (result.fairBudgetEvicted > 0) {
+      session = {
+        ...session,
+        health: {
+          ...session.health,
+          fairBudgetEvictions: (session.health.fairBudgetEvictions ?? 0) + result.fairBudgetEvicted,
+        },
+      };
+    }
   }
 
   if (session?.id) {
@@ -651,15 +678,29 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
 
   const stored = shouldRedact(meta.session) ? redactDeep(entry) : entry;
   const stats = await loadCaptureStats(meta.session.id);
-  const result = await idbUpsertNetworkEntry(meta.session.id, stored, stats.bytes);
+  const result = await idbUpsertNetworkEntry(
+    meta.session.id,
+    stored,
+    stats.bytes,
+    normalizeCaptureBudgets(meta.session.options.budgets),
+  );
   const nextStats = applyEntryStats(meta.session.id, stored, result.previous, result.isNew);
   applyEvictedEntries(meta.session.id, result.evicted);
 
   let session = meta.session;
   if (result.truncated > 0) {
     session = bumpTruncation(session, { network: result.truncated });
-    await writePersistedMeta({ session });
   }
+  if (result.fairBudgetEvicted > 0) {
+    session = {
+      ...session,
+      health: {
+        ...session.health,
+        fairBudgetEvictions: (session.health.fairBudgetEvictions ?? 0) + result.fairBudgetEvicted,
+      },
+    };
+  }
+  if (result.truncated > 0 || result.fairBudgetEvicted > 0) await writePersistedMeta({ session });
 
   const evidence = await readEvidence(session.id);
   schedulePopupSnapshot({

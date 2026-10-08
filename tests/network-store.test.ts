@@ -124,4 +124,41 @@ describe("network store (IndexedDB)", () => {
       NETWORK_STORE_LIMITS.byteBudget = 128 * 1024 * 1024;
     }
   });
+
+  it("evicts oldest entries from an overrepresented origin and reports the fairness eviction", async () => {
+    const result = await upsertNetworkEntry(
+      SESSION,
+      {
+        id: "origin-2",
+        sessionId: SESSION,
+        requestId: "origin-2",
+        timestamp: 2,
+        url: "https://example.test/api/second",
+        method: "GET",
+        type: "fetch",
+      },
+      undefined,
+      { perOriginBytes: 500, perCategoryBytes: 10_000 },
+    );
+    const secondResult = await upsertNetworkEntry(
+      SESSION,
+      {
+        id: "origin-1",
+        sessionId: SESSION,
+        requestId: "origin-1",
+        timestamp: 1,
+        url: "https://example.test/api/first",
+        method: "GET",
+        type: "fetch",
+      },
+      undefined,
+      { perOriginBytes: 500, perCategoryBytes: 10_000 },
+    );
+
+    expect(result.fairBudgetEvicted).toBe(0);
+    expect(secondResult.fairBudgetEvicted).toBe(1);
+    const entries = await listNetworkEntries(SESSION);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.requestId).toBe("origin-2");
+  });
 });

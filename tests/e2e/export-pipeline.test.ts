@@ -40,8 +40,8 @@ describe("E2E export pipeline", () => {
     expect(manifest.privacy.remoteUpload).toBe(false);
     expect(manifest.privacy.redactionEnabled).toBe(true);
     expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(REQUIRED_FILES);
-    expect(manifest.schemaVersion).toBe(3);
-    expect(manifest.coverage.schemaVersion).toBe(3);
+    expect(manifest.schemaVersion).toBe(4);
+    expect(manifest.coverage.schemaVersion).toBe(4);
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
     expect(manifest.coverage.capture.pauseIntervals).toEqual([]);
     expect(manifest.coverage.policy.redactionEnabled).toBe(true);

@@ -14,7 +14,9 @@ import {
   captureProfileDefaults,
   DEFAULT_CAPTURE_OPTIONS,
   inferCaptureProfile,
+  normalizeCaptureBudgets,
   normalizeCaptureProfile,
+  policyEpochFromOptions,
 } from "../shared/types.js";
 import type { CaptureOptions, CaptureSession, CaptureTarget } from "../shared/types.js";
 
@@ -40,6 +42,7 @@ export async function createSession(
   await loadRedactionConfig();
   const redactionEnabled = await readRedactionPreference();
   const profile = normalizeCaptureProfile(inferCaptureProfile(options));
+  const startedAt = Date.now();
   const targetMap = new Map<number, CaptureTarget>();
   for (const target of targetTabs ?? []) {
     targetMap.set(target.tabId, { ...target, partialGaps: target.partialGaps ?? [] });
@@ -51,26 +54,29 @@ export async function createSession(
     targetMap.get(tabId)!,
     ...[...targetMap.values()].filter((target) => target.tabId !== tabId),
   ];
+  const normalizedOptions = {
+    ...DEFAULT_CAPTURE_OPTIONS,
+    ...options,
+    ...captureProfileDefaults(profile),
+    profile,
+    ...(allowedOrigins == null ? {} : { allowedOrigins }),
+    targetTabIds: targets.map((target) => target.tabId),
+    redactionEnabled,
+    budgets: normalizeCaptureBudgets(options.budgets),
+  };
   const session: CaptureSession = {
     id: crypto.randomUUID(),
     active: false,
     consentedAt: Date.now(),
-    startedAt: Date.now(),
+    startedAt,
     tabId,
     tabUrl,
     extensionVersion: getExtensionVersion(),
-    options: {
-      ...DEFAULT_CAPTURE_OPTIONS,
-      ...options,
-      ...captureProfileDefaults(profile),
-      profile,
-      ...(allowedOrigins == null ? {} : { allowedOrigins }),
-      targetTabIds: targets.map((target) => target.tabId),
-      redactionEnabled,
-    },
+    options: normalizedOptions,
     paused: false,
     pauseIntervals: [],
     targets,
+    policyEpochs: [policyEpochFromOptions(normalizedOptions, `epoch-${crypto.randomUUID()}`, startedAt)],
     health: newHealth(),
   };
   await clearSessionData();
@@ -117,6 +123,11 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
     paused: false,
     pauseIntervals,
     tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
+    policyEpochs: data.session.policyEpochs?.map((epoch, index, epochs) =>
+      index === epochs.length - 1 && epoch.endedAt == null
+        ? { ...epoch, endedAt: stoppedAt }
+        : epoch,
+    ),
   };
   await setSession(stopped);
   return stopped;

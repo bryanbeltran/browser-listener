@@ -1,5 +1,31 @@
 export type CaptureProfile = "metadata" | "network-console" | "safe-bodies";
 
+export interface CaptureBudgets {
+  /** Maximum estimated stored bytes for one URL origin within a session. */
+  perOriginBytes: number;
+  /** Maximum estimated stored bytes for one CDP resource category within a session. */
+  perCategoryBytes: number;
+}
+
+export const DEFAULT_CAPTURE_BUDGETS: CaptureBudgets = {
+  perOriginBytes: 32 * 1024 * 1024,
+  perCategoryBytes: 64 * 1024 * 1024,
+};
+
+export function normalizeCaptureBudgets(value: unknown): CaptureBudgets {
+  const candidate = value && typeof value === "object" ? value as Partial<CaptureBudgets> : {};
+  const positive = (candidateValue: unknown, fallback: number): number => {
+    if (typeof candidateValue !== "number" || !Number.isFinite(candidateValue) || candidateValue <= 0) {
+      return fallback;
+    }
+    return Math.floor(candidateValue);
+  };
+  return {
+    perOriginBytes: positive(candidate.perOriginBytes, DEFAULT_CAPTURE_BUDGETS.perOriginBytes),
+    perCategoryBytes: positive(candidate.perCategoryBytes, DEFAULT_CAPTURE_BUDGETS.perCategoryBytes),
+  };
+}
+
 export interface CaptureOptions {
   /** Named, immutable capture policy selected before a session starts. */
   profile: CaptureProfile;
@@ -13,6 +39,8 @@ export interface CaptureOptions {
   allowedOrigins?: string[];
   /** Explicitly selected tab IDs; omitted means the primary tab only. */
   targetTabIds?: number[];
+  /** Fairness budgets applied in addition to the global storage limits. */
+  budgets?: CaptureBudgets;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -20,6 +48,7 @@ export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
   captureBodies: false,
   captureConsole: true,
   redactionEnabled: true,
+  budgets: DEFAULT_CAPTURE_BUDGETS,
 };
 
 export function normalizeCaptureProfile(value: unknown): CaptureProfile {
@@ -41,6 +70,37 @@ export function captureProfileDefaults(profile: CaptureProfile): Pick<CaptureOpt
     : profile === "safe-bodies"
       ? { captureBodies: true, captureConsole: true }
       : { captureBodies: false, captureConsole: true };
+}
+
+export interface CapturePolicyEpoch {
+  id: string;
+  startedAt: number;
+  endedAt?: number;
+  profile: CaptureProfile;
+  redactionEnabled: boolean;
+  captureBodies: boolean;
+  captureConsole: boolean;
+  allowedOrigins: string[];
+  budgets: CaptureBudgets;
+}
+
+export function policyEpochFromOptions(
+  options: CaptureOptions,
+  id: string,
+  startedAt: number,
+  endedAt?: number,
+): CapturePolicyEpoch {
+  return {
+    id,
+    startedAt,
+    ...(endedAt == null ? {} : { endedAt }),
+    profile: normalizeCaptureProfile(options.profile),
+    redactionEnabled: options.redactionEnabled !== false,
+    captureBodies: options.captureBodies === true,
+    captureConsole: options.captureConsole !== false,
+    allowedOrigins: [...(options.allowedOrigins ?? [])],
+    budgets: normalizeCaptureBudgets(options.budgets),
+  };
 }
 
 export interface NavigationEntry {
@@ -114,6 +174,7 @@ export interface SessionHealth {
   bodiesSkippedSessionCap?: number;
   bodiesPerResponseTruncated?: number;
   filteredNetworkRequests?: number;
+  fairBudgetEvictions?: number;
 }
 
 export interface HealthGap {
@@ -157,6 +218,8 @@ export interface CaptureSession {
   paused?: boolean;
   pauseIntervals?: PauseInterval[];
   targets?: CaptureTarget[];
+  /** Immutable policy snapshots; legacy sessions are normalized to one epoch on read. */
+  policyEpochs?: CapturePolicyEpoch[];
 }
 
 /** Slim session fields for popup UI. */
@@ -225,6 +288,47 @@ export interface NetworkEntry {
   requestBodySize?: number;
   responseBodySize?: number;
   bodyCaptured?: boolean;
+  requestBodyState?: CoverageState;
+  responseBodyState?: CoverageState;
+  requestBodySkipReason?: BodySkipReason;
+  responseBodySkipReason?: BodySkipReason;
+  requestBodyEncoding?: BodyEncoding;
+  responseBodyEncoding?: BodyEncoding;
+  requestTransferSize?: number;
+  responseTransferSize?: number;
+}
+
+export type CoverageState =
+  | "observed"
+  | "excluded"
+  | "redacted"
+  | "truncated"
+  | "unavailable"
+  | "dropped";
+
+export type BodySkipReason =
+  | "capture-disabled"
+  | "missing-mime-type"
+  | "unsafe-mime-type"
+  | "no-body"
+  | "body-unavailable"
+  | "capture-error"
+  | "per-response-cap"
+  | "session-budget";
+
+export type BodyEncoding = "utf-8" | "base64" | "unknown";
+
+export type CoverageStateCounts = Record<CoverageState, number>;
+
+export interface CoverageStateSummary {
+  network: CoverageStateCounts;
+  navigation: CoverageStateCounts;
+  console: CoverageStateCounts;
+  markers: CoverageStateCounts;
+  bodies: {
+    request: CoverageStateCounts;
+    response: CoverageStateCounts;
+  };
 }
 
 /** Low-volume page metadata snapshot; page content and DOM are intentionally excluded. */
@@ -274,7 +378,7 @@ export interface CoverageMetric {
 
 /** Machine-readable provenance and completeness summary for an export. */
 export interface CoverageReport {
-  schemaVersion: 3;
+  schemaVersion: 4;
   generatedAt: number;
   source: {
     sessionId?: string;
@@ -300,6 +404,8 @@ export interface CoverageReport {
     captureBodies: boolean;
     captureConsole: boolean;
     allowedOrigins: string[];
+    budgets: CaptureBudgets;
+    epochs: CapturePolicyEpoch[];
   };
   totals: {
     network: number;
@@ -330,6 +436,7 @@ export interface CoverageReport {
       note: CoverageMetric;
     };
   };
+  states: CoverageStateSummary;
   quality: {
     networkTruncated: number;
     navigationTruncated: number;
@@ -342,13 +449,15 @@ export interface CoverageReport {
     contextSnapshotsTruncated: number;
     performanceSignalsTruncated: number;
     filteredNetworkRequests: number;
+    fairBudgetEvictions: number;
+    bodySkipReasons: Partial<Record<BodySkipReason, number>>;
     partial: boolean;
     gapReasons: string[];
   };
 }
 
 export interface PrivacyReceipt {
-  schemaVersion: 1;
+  schemaVersion: 2;
   redactionEnabled: boolean;
   redactionRuleSetVersion: string;
   audit: RedactionAudit;
@@ -357,6 +466,9 @@ export interface PrivacyReceipt {
   scope: "active-tab" | "selected-tabs";
   localOnly: true;
   remoteUpload: false;
+  policyEpochs: CapturePolicyEpoch[];
+  states: CoverageStateSummary;
+  warnings: string[];
 }
 
 export interface RedactionAudit {
@@ -367,7 +479,7 @@ export interface RedactionAudit {
 
 export interface ExportManifest {
   /** Export contract version. */
-  schemaVersion: 3;
+  schemaVersion: 4;
   format: "browser-listener";
   /** Extension version at export time. */
   version: string;

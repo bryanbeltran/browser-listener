@@ -26,6 +26,7 @@ describe("safe body capture", () => {
     expect(json.text).toContain(REDACTED);
     expect(json.text).not.toContain("secret-token-value");
     expect(json.truncated).toBe(false);
+    expect(json.redacted).toBe(true);
 
     const form = prepareBodyForStorage("access_token=leak-me&message=hello");
     expect(form.text).not.toContain("leak-me");
@@ -38,6 +39,7 @@ describe("safe body capture", () => {
   it("preserves body values only when redaction is explicitly disabled", () => {
     const raw = prepareBodyForStorage('{"token":"secret-token-value"}', false);
     expect(raw.text).toContain("secret-token-value");
+    expect(raw.redacted).toBe(false);
   });
 
   it("decodes base64 CDP bodies", () => {

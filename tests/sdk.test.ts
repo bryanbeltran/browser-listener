@@ -25,7 +25,7 @@ describe("bundle SDK", () => {
     expect(filterNetwork(bundle, { statusMin: 200 })).toHaveLength(1);
     expect(filterConsole(bundle, { levels: ["warning"] })).toHaveLength(1);
     expect(cite(bundle, "raw.har", "n-sample-1")).toBe(
-      "browser-listener://sample-export-session/raw.har/n-sample-1?schema=3",
+      "browser-listener://sample-export-session/raw.har/n-sample-1?schema=4",
     );
     expect(summarize(bundle)).toMatchObject({
       sessionId: "sample-export-session",

@@ -14,6 +14,8 @@ function schema(name: string): Record<string, unknown> {
 describe("versioned schema contract", () => {
   it("publishes all current artifact schemas with stable IDs", () => {
     const names = [
+      "export-manifest.v4.schema.json",
+      "coverage.v4.schema.json",
       "export-manifest.v3.schema.json",
       "coverage.v3.schema.json",
       "raw-har.v1.2.schema.json",
@@ -34,8 +36,8 @@ describe("versioned schema contract", () => {
     const manifest = JSON.parse(files["export-manifest.json"]);
     const har = JSON.parse(files["raw.har"]);
     const rawConsole = JSON.parse(files["raw-console.json"]);
-    expect(manifest.schemaVersion).toBe(3);
-    expect(manifest.coverage.schemaVersion).toBe(3);
+    expect(manifest.schemaVersion).toBe(4);
+    expect(manifest.coverage.schemaVersion).toBe(4);
     expect(har.log.version).toBe("1.2");
     expect(Array.isArray(rawConsole)).toBe(true);
     expect(Object.keys(files).sort()).toEqual([

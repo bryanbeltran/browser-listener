@@ -87,6 +87,14 @@ interface HarEntry {
     bodyCaptured?: boolean;
     requestBodyTruncated?: boolean;
     responseBodyTruncated?: boolean;
+    requestBodyState?: NetworkEntry["requestBodyState"];
+    responseBodyState?: NetworkEntry["responseBodyState"];
+    requestBodySkipReason?: NetworkEntry["requestBodySkipReason"];
+    responseBodySkipReason?: NetworkEntry["responseBodySkipReason"];
+    requestBodyEncoding?: NetworkEntry["requestBodyEncoding"];
+    responseBodyEncoding?: NetworkEntry["responseBodyEncoding"];
+    requestTransferSize?: number;
+    responseTransferSize?: number;
     timing?: NetworkEntry["timing"];
   };
 }
@@ -204,6 +212,14 @@ function harEntry(entry: NetworkEntry): HarEntry {
       bodyCaptured: entry.bodyCaptured,
       requestBodyTruncated: entry.requestBodyTruncated,
       responseBodyTruncated: entry.responseBodyTruncated,
+      requestBodyState: entry.requestBodyState,
+      responseBodyState: entry.responseBodyState,
+      requestBodySkipReason: entry.requestBodySkipReason,
+      responseBodySkipReason: entry.responseBodySkipReason,
+      requestBodyEncoding: entry.requestBodyEncoding,
+      responseBodyEncoding: entry.responseBodyEncoding,
+      requestTransferSize: entry.requestTransferSize,
+      responseTransferSize: entry.responseTransferSize,
       timing: entry.timing,
     },
   };

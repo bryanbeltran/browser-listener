@@ -73,16 +73,21 @@ describe("coverage report", () => {
   it("summarizes generic evidence, field coverage, and quality signals", () => {
     const report = buildCoverageReport(evidenceData());
 
-    expect(report.schemaVersion).toBe(3);
+    expect(report.schemaVersion).toBe(4);
     expect(report.source.tabUrl).toContain("example.test");
     expect(report.capture).toEqual({ paused: false, pauseIntervals: [] });
-    expect(report.policy).toEqual({
+    expect(report.policy).toMatchObject({
       profile: "network-console",
       redactionEnabled: true,
       captureBodies: false,
       captureConsole: true,
       allowedOrigins: [],
+      budgets: {
+        perOriginBytes: 32 * 1024 * 1024,
+        perCategoryBytes: 64 * 1024 * 1024,
+      },
     });
+    expect(report.policy.epochs).toHaveLength(1);
     expect(report.totals).toEqual({
       network: 2,
       navigation: 1,
@@ -109,8 +114,15 @@ describe("coverage report", () => {
       contextSnapshotsTruncated: 0,
       performanceSignalsTruncated: 0,
       filteredNetworkRequests: 0,
+      fairBudgetEvictions: 0,
+      bodySkipReasons: {},
       partial: true,
       gapReasons: ["debugger_detach: canceled"],
     });
+    expect(report.states.network.observed).toBe(2);
+    expect(report.states.network.dropped).toBe(2);
+    expect(report.states.bodies.request.excluded).toBe(2);
+    expect(report.states.bodies.response.observed).toBe(1);
+    expect(report.states.bodies.response.excluded).toBe(1);
   });
 });

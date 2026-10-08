@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://browser-listener.dev/schemas/coverage.v4.schema.json",
+  "title": "Browser Listener coverage report v4",
+  "type": "object",
+  "required": ["schemaVersion", "generatedAt", "source", "capture", "policy", "totals", "fields", "states", "quality"],
+  "properties": {
+    "schemaVersion": { "const": 4 },
+    "generatedAt": { "type": "integer", "minimum": 0 },
+    "source": { "type": "object", "properties": { "targets": { "type": "array", "items": { "type": "object" } } } },
+    "capture": {
+      "type": "object",
+      "required": ["paused", "pauseIntervals"],
+      "properties": {
+        "paused": { "type": "boolean" },
+        "pauseIntervals": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets", "epochs"],
+      "properties": {
+        "profile": { "enum": ["metadata", "network-console", "safe-bodies"] },
+        "redactionEnabled": { "type": "boolean" },
+        "captureBodies": { "type": "boolean" },
+        "captureConsole": { "type": "boolean" },
+        "allowedOrigins": { "type": "array", "items": { "type": "string" } },
+        "budgets": {
+          "type": "object",
+          "required": ["perOriginBytes", "perCategoryBytes"],
+          "properties": {
+            "perOriginBytes": { "type": "integer", "minimum": 1 },
+            "perCategoryBytes": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "epochs": { "type": "array", "items": { "$ref": "#/$defs/policyEpoch" } }
+      }
+    },
+    "totals": { "type": "object", "required": ["network", "navigation", "console", "markers", "requestBodies", "responseBodies", "contextSnapshots", "performanceSignals"] },
+    "fields": { "type": "object" },
+    "states": { "$ref": "#/$defs/stateSummary" },
+    "quality": {
+      "type": "object",
+      "required": ["partial", "gapReasons", "fairBudgetEvictions", "bodySkipReasons"],
+      "properties": {
+        "partial": { "type": "boolean" },
+        "gapReasons": { "type": "array", "items": { "type": "string" } },
+        "fairBudgetEvictions": { "type": "integer", "minimum": 0 },
+        "bodySkipReasons": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      }
+    }
+  },
+  "$defs": {
+    "stateCounts": {
+      "type": "object",
+      "required": ["observed", "excluded", "redacted", "truncated", "unavailable", "dropped"],
+      "properties": {
+        "observed": { "type": "integer", "minimum": 0 },
+        "excluded": { "type": "integer", "minimum": 0 },
+        "redacted": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "integer", "minimum": 0 },
+        "unavailable": { "type": "integer", "minimum": 0 },
+        "dropped": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stateSummary": {
+      "type": "object",
+      "required": ["network", "navigation", "console", "markers", "bodies"],
+      "properties": {
+        "network": { "$ref": "#/$defs/stateCounts" },
+        "navigation": { "$ref": "#/$defs/stateCounts" },
+        "console": { "$ref": "#/$defs/stateCounts" },
+        "markers": { "$ref": "#/$defs/stateCounts" },
+        "bodies": {
+          "type": "object",
+          "required": ["request", "response"],
+          "properties": {
+            "request": { "$ref": "#/$defs/stateCounts" },
+            "response": { "$ref": "#/$defs/stateCounts" }
+          }
+        }
+      }
+    },
+    "policyEpoch": {
+      "type": "object",
+      "required": ["id", "startedAt", "profile", "redactionEnabled", "captureBodies", "captureConsole", "allowedOrigins", "budgets"],
+      "properties": {
+        "id": { "type": "string" },
+        "startedAt": { "type": "integer", "minimum": 0 },
+        "endedAt": { "type": "integer", "minimum": 0 },
+        "profile": { "enum": ["metadata", "network-console", "safe-bodies"] },
+        "redactionEnabled": { "type": "boolean" },
+        "captureBodies": { "type": "boolean" },
+        "captureConsole": { "type": "boolean" },
+        "allowedOrigins": { "type": "array", "items": { "type": "string" } },
+        "budgets": {
+          "type": "object",
+          "required": ["perOriginBytes", "perCategoryBytes"],
+          "properties": {
+            "perOriginBytes": { "type": "integer", "minimum": 1 },
+            "perCategoryBytes": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

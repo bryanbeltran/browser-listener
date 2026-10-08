@@ -396,6 +396,14 @@ async function onDebuggerEvent(
       fromCache: response?.fromDiskCache,
       fromServiceWorker: response?.fromServiceWorker,
       connectionReused: response?.connectionReused,
+      ...(!session.options.captureBodies
+        ? {
+            requestBodyState: "excluded" as const,
+            requestBodySkipReason: "capture-disabled" as const,
+            responseBodyState: "excluded" as const,
+            responseBodySkipReason: "capture-disabled" as const,
+          }
+        : {}),
     };
     entry.timing = completedTiming(entry, responseTimestamp);
     pendingCdp.set(key, entry);
@@ -425,7 +433,13 @@ async function onDebuggerEvent(
     if (!pending?.url) return;
     const base = pending as NetworkEntry;
     const job = (async () => {
-      const completed: NetworkEntry = { ...base, timing: completedTiming(base, Date.now()) };
+      const completed: NetworkEntry = {
+        ...base,
+        ...(typeof p.encodedDataLength === "number" && Number.isFinite(p.encodedDataLength)
+          ? { responseTransferSize: p.encodedDataLength }
+          : {}),
+        timing: completedTiming(base, Date.now()),
+      };
       pendingCdp.set(key, completed);
       await upsertNetwork(completed);
       const bodies = await captureBodiesForRequest(tabId, requestId, completed);

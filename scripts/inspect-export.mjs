@@ -31,7 +31,7 @@ function assertSafeArchivePaths(files) {
 
 function assertCoverage(coverage) {
   if (!coverage || typeof coverage !== "object") throw new Error("Coverage report is missing");
-  if (![1, 2, 3].includes(coverage.schemaVersion)) {
+  if (![1, 2, 3, 4].includes(coverage.schemaVersion)) {
     throw new Error(`Unsupported coverage schema version: ${coverage.schemaVersion ?? "missing"}`);
   }
   if (!coverage.totals || typeof coverage.totals !== "object") throw new Error("Coverage totals are missing");
@@ -71,7 +71,7 @@ function validateCurrentExport(archive, manifest, readJson, warnings) {
   if (missing.length) throw new Error(`Required artifact(s) missing: ${missing.join(", ")}`);
 
   if (manifest.format !== "browser-listener") throw new Error("Unsupported export format");
-  if (![2, 3].includes(manifest.schemaVersion)) {
+  if (![2, 3, 4].includes(manifest.schemaVersion)) {
     throw new Error(`Unsupported export schema version: ${manifest.schemaVersion ?? "missing"}`);
   }
   if (manifest.schemaVersion < 3) warnings.push(`Legacy current export schema v${manifest.schemaVersion}`);

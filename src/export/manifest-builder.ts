@@ -9,6 +9,7 @@ import {
   captureProfileDefaults,
   DEFAULT_CAPTURE_OPTIONS,
   inferCaptureProfile,
+  normalizeCaptureBudgets,
 } from "../shared/types.js";
 import { emptyTruncation } from "../persistence/limits.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
@@ -23,7 +24,22 @@ export const REQUIRED_EXPORT_FILES = [
   "export-manifest.json",
 ] as const;
 
-export const EXPORT_MANIFEST_SCHEMA_VERSION = 3 as const;
+export const EXPORT_MANIFEST_SCHEMA_VERSION = 4 as const;
+
+function privacyWarnings(data: SessionData, coverage: CoverageReport): string[] {
+  const warnings: string[] = [];
+  if (data.session?.options?.redactionEnabled === false) {
+    warnings.push("Redaction was explicitly disabled; treat captured values as sensitive.");
+  }
+  if (coverage.quality.partial) warnings.push("Capture completeness is partial; inspect coverage and health gaps before sharing.");
+  if (coverage.quality.fairBudgetEvictions > 0) {
+    warnings.push("Fair storage budgets evicted older network entries from an overrepresented origin or category.");
+  }
+  if (coverage.quality.bodySkipReasons["unsafe-mime-type"] || coverage.quality.bodySkipReasons["session-budget"]) {
+    warnings.push("Some request or response bodies were not retained because of safety or storage policy.");
+  }
+  return warnings;
+}
 
 export function buildExportManifest(
   data: SessionData,
@@ -39,6 +55,7 @@ export function buildExportManifest(
     ...data.session?.options,
     ...captureProfileDefaults(profile),
     profile,
+    budgets: normalizeCaptureBudgets(data.session?.options?.budgets),
   };
   return {
     schemaVersion: EXPORT_MANIFEST_SCHEMA_VERSION,
@@ -48,7 +65,7 @@ export function buildExportManifest(
     sessionId: data.session?.id ?? "none",
     exportedAt,
     privacy: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       redactionRuleSetVersion: REDACTION_RULE_SET_VERSION,
       audit: buildRedactionAudit(data),
       captureBodies: options.captureBodies,
@@ -57,6 +74,9 @@ export function buildExportManifest(
       localOnly: true,
       remoteUpload: false,
       redactionEnabled: data.session?.options?.redactionEnabled !== false,
+      policyEpochs: coverage.policy.epochs,
+      states: coverage.states,
+      warnings: privacyWarnings(data, coverage),
     },
     options,
     files,
