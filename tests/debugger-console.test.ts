@@ -59,6 +59,10 @@ describe("CDP console capture", () => {
     const data = await readSessionData();
     expect(data.console).toHaveLength(2);
     expect(data.console.map((entry) => entry.level)).toEqual(["error", "error"]);
+    expect(data.console.map((entry) => entry.method)).toEqual([
+      "Runtime.consoleAPICalled",
+      "Runtime.exceptionThrown",
+    ]);
     expect(data.console[0]?.text).toContain("render failed");
     expect(data.console[1]?.text).toContain("Unhandled exception");
   });

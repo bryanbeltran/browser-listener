@@ -12,18 +12,14 @@ export function buildZip(files: ZipFileMap): Uint8Array {
 
 export function zipFileMapFromExport(bundle: {
   reportHtml: string;
-  session: string;
-  network: string;
-  console: string;
-  coverageReport: string;
+  rawHar: string;
+  rawConsole: string;
   manifest: string;
 }): ZipFileMap {
   return {
     "report.html": bundle.reportHtml,
-    "session.json": bundle.session,
-    "network.json": bundle.network,
-    "console.json": bundle.console,
-    "coverage-report.json": bundle.coverageReport,
+    "raw.har": bundle.rawHar,
+    "raw-console.json": bundle.rawConsole,
     "export-manifest.json": bundle.manifest,
   };
 }

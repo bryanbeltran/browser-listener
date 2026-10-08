@@ -2,10 +2,11 @@ import { redactDeep, redactSensitiveString } from "../redaction/engine.js";
 import { readSessionData } from "../persistence/store.js";
 import { generateReportHtml } from "../report/generate.js";
 import { buildCoverageReport } from "./coverage.js";
+import { buildHar } from "./har.js";
 import { baseManifestFiles, buildExportManifest } from "./manifest-builder.js";
 import { buildSessionSummary } from "./summary.js";
 import { buildZip, zipFileMapFromExport } from "./zip-builder.js";
-import type { SessionArtifact, SessionData } from "../shared/types.js";
+import type { SessionData } from "../shared/types.js";
 
 /** Redact export data again at the boundary. */
 export async function processSessionForExport(data: SessionData): Promise<SessionData> {
@@ -31,21 +32,12 @@ export async function buildZipFromSessionData(data: SessionData): Promise<Uint8A
 
 async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
   const coverageReport = buildCoverageReport(data);
-  const summary = buildSessionSummary(data);
-  const sessionArtifact: SessionArtifact = {
-    schemaVersion: 1,
-    session: data.session,
-    navigation: data.navigation,
-    summary,
-  };
   const files = baseManifestFiles();
   const bundle = {
     reportHtml: generateReportHtml(data, coverageReport),
-    session: JSON.stringify(sessionArtifact, null, 2),
-    network: JSON.stringify(data.network, null, 2),
-    console: JSON.stringify(data.console, null, 2),
-    coverageReport: JSON.stringify(coverageReport, null, 2),
-    manifest: JSON.stringify(buildExportManifest(data, files), null, 2),
+    rawHar: JSON.stringify(buildHar(data), null, 2),
+    rawConsole: JSON.stringify(data.console, null, 2),
+    manifest: JSON.stringify(buildExportManifest(data, files, coverageReport), null, 2),
   };
   return buildZip(zipFileMapFromExport(bundle));
 }

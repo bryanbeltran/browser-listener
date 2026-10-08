@@ -171,6 +171,7 @@ function consoleEntry(
     id: crypto.randomUUID(),
     sessionId,
     timestamp: eventTimestamp(fields.timestamp),
+    method: typeof fields.method === "string" ? fields.method : undefined,
     level,
     text: text || "(empty console entry)",
     tabId: tabId >= 0 ? tabId : undefined,
@@ -195,6 +196,7 @@ async function captureConsoleEvent(
     const args = Array.isArray(params.args) ? params.args : [];
     await appendConsole(
       consoleEntry(sessionId, tabId, String(params.type ?? "log"), args.map(remoteObjectText).join(" "), {
+        method,
         timestamp: params.timestamp,
         args,
         stackTrace: params.stackTrace,
@@ -207,6 +209,7 @@ async function captureConsoleEvent(
     const exception = details.exception as Record<string, unknown> | undefined;
     await appendConsole(
       consoleEntry(sessionId, tabId, "error", String(details.text ?? exception?.description ?? "Unhandled exception"), {
+        method,
         timestamp: details.timestamp,
         url: details.url,
         lineNumber: details.lineNumber,
@@ -220,6 +223,7 @@ async function captureConsoleEvent(
     const entry = (params.entry ?? {}) as Record<string, unknown>;
     await appendConsole(
       consoleEntry(sessionId, tabId, String(entry.level ?? "info"), String(entry.text ?? ""), {
+        method,
         timestamp: entry.timestamp,
         source: entry.source,
         url: entry.url,

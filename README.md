@@ -13,7 +13,7 @@ Start capture only after explicit user activation, reproduce a problem, stop cap
 - Browser navigation history.
 - Console logs, runtime exceptions, and browser log entries.
 - Bounded storage with visible truncation and debugger health gaps.
-- Offline HTML report plus machine-readable JSON artifacts.
+- Offline HTML report plus raw HAR and console artifacts.
 - ZIP inspector for CI, support, and local debugging workflows.
 
 ## Stack
@@ -43,18 +43,16 @@ npm run inspect -- path/to/browser-listener-export.zip --json
 
 ## ZIP contract
 
-Every export contains exactly six required artifacts:
+Every export contains exactly four required artifacts:
 
 | File | Contents |
 |------|----------|
 | `report.html` | Offline searchable timeline, coverage, citation, and health view |
-| `session.json` | Session metadata, navigation evidence, and summary counts |
-| `network.json` | Redacted network metadata and opt-in bounded bodies |
-| `console.json` | Redacted console, exception, and browser log entries |
-| `coverage-report.json` | Evidence totals, field coverage, truncation, and health quality signals |
-| `export-manifest.json` | Version, privacy flags, capture options, artifact list, and health snapshot |
+| `raw.har` | Standard HAR 1.2 network log with redacted metadata and opt-in bounded bodies |
+| `raw-console.json` | Redacted console, exception, and browser log records |
+| `export-manifest.json` | Version, privacy flags, capture options, artifact list, coverage, and health snapshot |
 
-All JSON is redacted on persistence and again at export. Body capture is off by default. When enabled, only JSON/text-like MIME types are eligible, each body is capped at 256 KiB, and session body storage is capped at 4 MiB.
+All export content is redacted on persistence and again at export. Body capture is off by default. When enabled, only JSON/text-like MIME types are eligible, each body is capped at 256 KiB, and session body storage is capped at 4 MiB.
 
 ## Core flow
 
@@ -62,7 +60,7 @@ All JSON is redacted on persistence and again at export. Body capture is off by 
 2. Service worker creates session metadata and attaches CDP debugger.
 3. CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries.
 4. Storage keeps network data in IndexedDB and low-volume evidence in bounded local storage.
-5. Stop detaches CDP, snapshots health, builds six artifacts, and downloads ZIP locally.
+5. Stop detaches CDP, snapshots health, builds four artifacts, and downloads ZIP locally.
 
 ## Privacy and permissions
 
@@ -85,7 +83,7 @@ Chrome displays its debugger warning while capture is active. MV3 service-worker
 - Console: 5,000 entries per session.
 - Request/response bodies: opt-in, safe MIME types, 256 KiB per body, 4 MiB per session.
 - Exports are observational captures, not guaranteed complete copies of a page.
-- `coverage-report.json` records missing fields, truncation, body skips, persistence errors, and debugger gaps.
+- `export-manifest.json` records field coverage, truncation, body skips, persistence errors, and debugger gaps.
 
 ## Repository layout
 
@@ -94,7 +92,7 @@ src/
   capture/        Session lifecycle, CDP capture, body policy, stop/export flow
   background/     MV3 service worker and tab lifecycle
   persistence/    Metadata, bounded evidence storage, IndexedDB network store, recovery
-  export/         Six-file ZIP orchestration, manifest, coverage
+  export/         Four-file ZIP orchestration, HAR, manifest, coverage
   report/         Searchable offline HTML report
   popup/          Consent, start/stop, health, and download UI
   redaction/      Default-deny redaction rules

@@ -26,6 +26,8 @@ export interface ConsoleEntry {
   id: string;
   sessionId: string;
   timestamp: number;
+  /** CDP event that produced this record. */
+  method?: string;
   level: ConsoleLevel | string;
   text: string;
   tabId?: number;
@@ -137,7 +139,7 @@ export interface NetworkEntry {
 
 export interface ArtifactManifestEntry {
   path: string;
-  kind: "report" | "json" | "other";
+  kind: "report" | "har" | "json" | "other";
   optional: boolean;
   enabled: boolean;
   bytes?: number;
@@ -192,6 +194,9 @@ export interface CoverageReport {
 }
 
 export interface ExportManifest {
+  /** Export contract version. */
+  schemaVersion: 2;
+  format: "browser-listener";
   /** Extension version at export time. */
   version: string;
   extensionVersion: string;
@@ -200,7 +205,7 @@ export interface ExportManifest {
   privacy: { localOnly: true; remoteUpload: false };
   options: CaptureOptions;
   files: ArtifactManifestEntry[];
-  coverage: { path: "coverage-report.json"; schemaVersion: 1 };
+  coverage: CoverageReport;
   health: SessionHealth;
 }
 
@@ -218,13 +223,6 @@ export interface SessionSummary {
     responseBodies: number;
   };
   health: SessionHealth;
-}
-
-export interface SessionArtifact {
-  schemaVersion: 1;
-  session: CaptureSession | null;
-  navigation: NavigationEntry[];
-  summary: SessionSummary;
 }
 
 export interface SessionData {

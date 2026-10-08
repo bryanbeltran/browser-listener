@@ -5,15 +5,13 @@ import { unzipToMap } from "../helpers/unzip.js";
 
 const REQUIRED_FILES = [
   "report.html",
-  "session.json",
-  "network.json",
-  "console.json",
-  "coverage-report.json",
+  "raw.har",
+  "raw-console.json",
   "export-manifest.json",
 ];
 
 describe("E2E export pipeline", () => {
-  it("builds ZIP with six portable evidence artifacts", async () => {
+  it("builds ZIP with four portable evidence artifacts", async () => {
     const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
     expect(Object.keys(files).sort()).toEqual([...REQUIRED_FILES].sort());
   });
@@ -29,13 +27,19 @@ describe("E2E export pipeline", () => {
   it("manifest asserts local-only privacy and generic coverage", async () => {
     const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
     const manifest = JSON.parse(files["export-manifest.json"]);
-    const coverage = JSON.parse(files["coverage-report.json"]);
+    const har = JSON.parse(files["raw.har"]);
+    const rawConsole = JSON.parse(files["raw-console.json"]);
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
     expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(REQUIRED_FILES);
-    expect(coverage.schemaVersion).toBe(1);
-    expect(coverage.source.tabUrl).toContain("example.test");
-    expect(JSON.parse(files["session.json"]).navigation).toHaveLength(1);
-    expect(JSON.parse(files["console.json"])).toHaveLength(1);
+    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.coverage.schemaVersion).toBe(1);
+    expect(manifest.coverage.source.tabUrl).toContain("example.test");
+    expect(har.log.version).toBe("1.2");
+    expect(har.log.entries).toHaveLength(1);
+    expect(har.log.entries[0].response.content.text).toContain('"items"');
+    expect(har.log.pages).toHaveLength(1);
+    expect(rawConsole).toHaveLength(1);
+    expect(files["report.html"]).not.toContain('"items"');
   });
 });

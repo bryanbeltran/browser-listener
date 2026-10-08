@@ -24,9 +24,14 @@ if (!input) {
       return JSON.parse(strFromU8(bytes));
     };
     const manifest = readJson("export-manifest.json");
-    const coverage = readJson("coverage-report.json");
     if (!manifest) throw new Error("export-manifest.json is missing");
-    const required = [
+    const currentRequired = [
+      "report.html",
+      "raw.har",
+      "raw-console.json",
+      "export-manifest.json",
+    ];
+    const legacyRequired = [
       "report.html",
       "session.json",
       "network.json",
@@ -34,11 +39,25 @@ if (!input) {
       "coverage-report.json",
       "export-manifest.json",
     ];
-    const missing = required.filter((path) => !archive[path]);
-    if (missing.length) throw new Error(`Required artifact(s) missing: ${missing.join(", ")}`);
+    const isCurrent = currentRequired.every((path) => archive[path]);
+    const isLegacy = legacyRequired.every((path) => archive[path]);
+    if (!isCurrent && !isLegacy) {
+      const missing = currentRequired.filter((path) => !archive[path]);
+      throw new Error(`Required artifact(s) missing: ${missing.join(", ")}`);
+    }
+    if (isCurrent) {
+      const har = readJson("raw.har");
+      const rawConsole = readJson("raw-console.json");
+      if (har?.log?.version !== "1.2" || !Array.isArray(har.log.entries)) {
+        throw new Error("raw.har is not a HAR 1.2 document");
+      }
+      if (!Array.isArray(rawConsole)) throw new Error("raw-console.json is not an array");
+    }
+    const coverage = manifest.coverage ?? readJson("coverage-report.json");
 
     const summary = {
       archive: resolve(input),
+      format: isCurrent ? "raw-har" : "legacy-six-file",
       sessionId: manifest.sessionId,
       extensionVersion: manifest.extensionVersion,
       exportedAt: manifest.exportedAt,

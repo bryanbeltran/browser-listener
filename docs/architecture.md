@@ -12,7 +12,7 @@ flowchart LR
   BG --> Aux[(storage.local bounded navigation + console)]
   BG --> IDB[(IndexedDB bounded network)]
   Popup -->|stop + export| BG
-  BG --> Export[Six-file ZIP]
+  BG --> Export[Four-file ZIP]
   Export --> Download[Local download]
 ```
 
@@ -24,7 +24,7 @@ flowchart LR
 | `background/` | MV3 service-worker entrypoint and captured-tab lifecycle |
 | `persistence/` | Session metadata, bounded auxiliary evidence, IndexedDB network store, caps |
 | `redaction/` | Default-deny headers, cookies, URL parameters, body values, and custom rules |
-| `export/` | Coverage, manifest, session summary, six-file ZIP orchestration |
+| `export/` | HAR, coverage, manifest, and four-file ZIP orchestration |
 | `report/` | Searchable offline timeline and health report |
 | `popup/` | Consent gate, session controls, health hints, download handoff |
 
@@ -55,14 +55,12 @@ The ZIP contains exactly:
 
 ```text
 report.html
-session.json
-network.json
-console.json
-coverage-report.json
+raw.har
+raw-console.json
 export-manifest.json
 ```
 
-`session.json` stores normalized session metadata, navigation evidence, and generic counts. `network.json` and `console.json` keep evidence streams separate for tooling. `coverage-report.json` reports totals, field presence, truncation, body skips, persistence errors, and debugger gaps. `export-manifest.json` records local-only privacy and enabled capture options.
+`raw.har` is a redacted HAR 1.2 log. `raw-console.json` stores redacted console, runtime exception, and browser log records. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, enabled capture options, coverage, truncation, persistence errors, and debugger gaps.
 
 ## Reliability
 

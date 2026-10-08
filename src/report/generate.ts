@@ -5,12 +5,24 @@ export function generateReportHtml(
   data: SessionData,
   coverage: CoverageReport = buildCoverageReport(data),
 ): string {
+  const reportNetwork = data.network.map((entry) => {
+    const copy = { ...entry };
+    delete copy.requestBody;
+    delete copy.responseBody;
+    return copy;
+  });
+  const reportConsole = data.console.map((entry) => {
+    const copy = { ...entry };
+    delete copy.args;
+    delete copy.stackTrace;
+    return copy;
+  });
   const summary = {
     session: data.session,
     coverage,
     navigation: data.navigation,
-    console: data.console,
-    network: data.network,
+    console: reportConsole,
+    network: reportNetwork,
   };
   const json = JSON.stringify(summary).replace(/</g, "\\u003c");
 
@@ -118,7 +130,7 @@ async function copyText(value){
 }
 copyButton?.addEventListener('click',async()=>{
   const citation=['Browser Listener capture','Source: '+(source||'unknown'),'Captured: '+formatDate(c.source.startedAt)+' — '+formatDate(c.source.stoppedAt),'Session: '+(s?.id||'unknown')].join('\\n');
-  try{await copyText(citation);if(citationStatus)citationStatus.textContent='Copied';}catch{if(citationStatus)citationStatus.textContent='Clipboard unavailable — use coverage-report.json';}
+  try{await copyText(citation);if(citationStatus)citationStatus.textContent='Copied';}catch{if(citationStatus)citationStatus.textContent='Clipboard unavailable — use export-manifest.json';}
 });
 
 const searchInput=document.getElementById('timeline-search'), searchCount=document.getElementById('search-count');

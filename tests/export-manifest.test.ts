@@ -3,13 +3,11 @@ import { baseManifestFiles, buildExportManifest } from "../src/export/manifest-b
 import { leakySessionData } from "./helpers/fixtures.js";
 
 describe("export manifest", () => {
-  it("lists six required evidence files", () => {
+  it("lists four required evidence files", () => {
     expect(baseManifestFiles().map((file) => file.path)).toEqual([
       "report.html",
-      "session.json",
-      "network.json",
-      "console.json",
-      "coverage-report.json",
+      "raw.har",
+      "raw-console.json",
       "export-manifest.json",
     ]);
   });
@@ -22,6 +20,9 @@ describe("export manifest", () => {
     expect(manifest.privacy.remoteUpload).toBe(false);
     expect(manifest.version).toBe("0.3.21");
     expect(manifest.extensionVersion).toBe("0.3.21");
-    expect(manifest.coverage).toEqual({ path: "coverage-report.json", schemaVersion: 1 });
+    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.format).toBe("browser-listener");
+    expect(manifest.coverage.schemaVersion).toBe(1);
+    expect(manifest.coverage.source.tabUrl).toContain("example.test");
   });
 });
