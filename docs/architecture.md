@@ -11,7 +11,7 @@ flowchart LR
   BG --> Meta[(storage.local session meta)]
   BG --> Aux[(storage.local bounded navigation + console)]
   BG --> IDB[(IndexedDB bounded network)]
-  Popup -->|stop + export| BG
+  Popup -->|pause/resume or stop + export| BG
   BG --> Export[Four-file ZIP]
   Export --> Download[Local download]
 ```
@@ -34,7 +34,8 @@ flowchart LR
 2. Background validates current tab is ordinary HTTP(S), creates metadata, and attaches CDP.
 3. CDP `Network.*` records network lifecycle. `Runtime.*` and `Log.entryAdded` record console evidence.
 4. `tabs.onUpdated` records top-frame URL changes for the explicitly captured tab.
-5. CDP detach and MV3 restart paths retry while the session remains active.
+5. Pause/resume suspends debugger evidence and bounded auxiliary persistence; each interval is retained in session metadata.
+6. CDP detach and MV3 restart paths retry while the session remains active.
 
 There is no broad host monitoring or request interception fallback. CDP is authoritative while the user-visible debugger session is active.
 
@@ -60,7 +61,7 @@ raw-console.json
 export-manifest.json
 ```
 
-`raw.har` is a HAR 1.2 log redacted by default. `raw-console.json` stores console, runtime exception, and browser log records redacted by default. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, redaction state, enabled capture options, coverage, truncation, persistence errors, and debugger gaps.
+`raw.har` is a HAR 1.2 log redacted by default. `raw-console.json` stores console, runtime exception, and browser log records redacted by default. `report.html` is a lightweight view and does not duplicate captured bodies. `export-manifest.json` records local-only privacy, redaction state, enabled capture options, coverage, pause intervals, truncation, persistence errors, and debugger gaps.
 
 ## Reliability
 

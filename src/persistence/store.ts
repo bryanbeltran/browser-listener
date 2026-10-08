@@ -23,10 +23,14 @@ import {
 import {
   DEFAULT_REDACTION_ENABLED,
   REDACTION_PREFERENCE_KEY,
+  REDACTION_CONFIG_KEY,
+  applyRedactionConfig,
+  loadRedactionConfig,
 } from "./preferences.js";
 import type {
   CaptureSession,
   ConsoleEntry,
+  MarkerEntry,
   NavigationEntry,
   NetworkEntry,
   PopupCounts,
@@ -35,6 +39,7 @@ import type {
   StorageTruncation,
 } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
+import { normalizeOriginAllowlist } from "../shared/urls.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
@@ -48,6 +53,7 @@ interface PersistedSessionMeta {
 interface PersistedEvidence {
   navigation: NavigationEntry[];
   console: ConsoleEntry[];
+  markers: MarkerEntry[];
 }
 
 type PersistedEvidenceMap = Record<string, PersistedEvidence>;
@@ -63,7 +69,7 @@ let popupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPopup: PopupCounts | null = null;
 
 export function emptySessionData(): SessionData {
-  return { session: null, network: [], navigation: [], console: [] };
+  return { session: null, network: [], navigation: [], console: [], markers: [] };
 }
 
 function isLegacySessionData(value: unknown): value is SessionData {
@@ -91,17 +97,25 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
     bodyBytesStored: h.bodyBytesStored,
     bodiesSkippedSessionCap: h.bodiesSkippedSessionCap,
     bodiesPerResponseTruncated: h.bodiesPerResponseTruncated,
+    filteredNetworkRequests: h.filteredNetworkRequests,
   };
 }
 
 function normalizeSession(session: CaptureSession | null): CaptureSession | null {
   if (!session) return null;
+  let allowedOrigins: string[] | undefined;
+  try {
+    allowedOrigins = normalizeOriginAllowlist(session.options?.allowedOrigins);
+  } catch {
+    allowedOrigins = [];
+  }
   return {
     ...session,
     options: {
       captureBodies: session.options?.captureBodies ?? false,
       captureConsole: session.options?.captureConsole ?? true,
       redactionEnabled: session.options?.redactionEnabled ?? DEFAULT_REDACTION_ENABLED,
+      ...(allowedOrigins == null ? {} : { allowedOrigins }),
     },
     health: normalizeHealth(session),
   };
@@ -112,6 +126,7 @@ function normalizeEvidence(value: unknown): PersistedEvidence {
   return {
     navigation: Array.isArray(evidence?.navigation) ? evidence.navigation : [],
     console: Array.isArray(evidence?.console) ? evidence.console : [],
+    markers: Array.isArray(evidence?.markers) ? evidence.markers : [],
   };
 }
 
@@ -121,6 +136,7 @@ function normalizeSessionData(data: Partial<SessionData>): SessionData {
     network: Array.isArray(data.network) ? data.network : [],
     navigation: Array.isArray(data.navigation) ? data.navigation : [],
     console: Array.isArray(data.console) ? data.console : [],
+    markers: Array.isArray(data.markers) ? data.markers : [],
   };
 }
 
@@ -129,6 +145,7 @@ function shouldRedact(session: CaptureSession | null): boolean {
 }
 
 async function readPersistedMeta(): Promise<PersistedSessionMeta> {
+  await loadRedactionConfig();
   const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
   const persisted = raw[STORAGE_KEY] as PersistedSessionMeta | SessionData | undefined;
   const activeId = (raw[ACTIVE_FLAG] as string | null) ?? null;
@@ -208,17 +225,26 @@ async function writeEvidence(
         args: safe.args?.map((arg) => redactSensitiveString(arg)),
       };
     }),
+    markers: evidence.markers.map((entry) => {
+      if (!redact) return entry;
+      const safe = redactDeep(entry);
+      return {
+        ...safe,
+        note: safe.note ? redactSensitiveString(safe.note) : undefined,
+      };
+    }),
   };
   await chrome.storage.local.set({ [EVIDENCE_KEY]: map });
 }
 
 async function readCounts(session: CaptureSession | null): Promise<PopupCounts> {
-  if (!session?.id) return { network: 0, navigation: 0, console: 0 };
+  if (!session?.id) return { network: 0, navigation: 0, console: 0, markers: 0 };
   const evidence = await readEvidence(session.id);
   return {
     network: await countNetworkEntries(session.id),
     navigation: evidence.navigation.length,
     console: evidence.console.length,
+    markers: evidence.markers.length,
   };
 }
 
@@ -325,7 +351,7 @@ function bumpTruncation(
 ): CaptureSession {
   const truncation = { ...emptyTruncation(), ...(session.health.truncation ?? {}) };
   for (const key of Object.keys(increments) as (keyof StorageTruncation)[]) {
-    truncation[key] += increments[key] ?? 0;
+    truncation[key] = (truncation[key] ?? 0) + (increments[key] ?? 0);
   }
   return { ...session, health: { ...session.health, truncation } };
 }
@@ -344,6 +370,7 @@ export async function readSessionData(): Promise<SessionData> {
     network,
     navigation: evidence.navigation,
     console: evidence.console,
+    markers: evidence.markers,
   });
 }
 
@@ -354,8 +381,10 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   let truncated = 0;
   const navigation = normalized.navigation.slice(-AUXILIARY_STORAGE_LIMITS.navigationEntries);
   const consoleEntries = normalized.console.slice(-AUXILIARY_STORAGE_LIMITS.consoleEntries);
+  const markers = (normalized.markers ?? []).slice(-AUXILIARY_STORAGE_LIMITS.markerEntries);
   const navigationTruncated = normalized.navigation.length - navigation.length;
   const consoleTruncated = normalized.console.length - consoleEntries.length;
+  const markersTruncated = (normalized.markers?.length ?? 0) - markers.length;
 
   if (session?.id && normalized.network.length > 0) {
     const stats = await loadCaptureStats(session.id);
@@ -368,15 +397,16 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
   }
 
   if (session?.id) {
-    await writeEvidence(session.id, { navigation, console: consoleEntries }, redact);
+    await writeEvidence(session.id, { navigation, console: consoleEntries, markers }, redact);
   }
 
   const sessionToStore =
-    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0)
+    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0 || markersTruncated > 0)
       ? bumpTruncation(session, {
           network: truncated,
           navigation: navigationTruncated,
           console: consoleTruncated,
+          markers: markersTruncated,
         })
       : session;
   const activeId = sessionToStore?.active ? sessionToStore.id : null;
@@ -396,6 +426,7 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
       network: networkCount,
       navigation: navigation.length,
       console: consoleEntries.length,
+      markers: markers.length,
     });
   } else {
     await flushPopupSnapshot();
@@ -407,6 +438,7 @@ export async function writeSessionData(data: SessionData): Promise<SessionData> 
     network,
     navigation,
     console: consoleEntries,
+    markers,
   });
 }
 
@@ -417,6 +449,7 @@ export async function syncPopupStateSnapshot(): Promise<void> {
     network: data.network.length,
     navigation: data.navigation.length,
     console: data.console.length,
+    markers: data.markers?.length ?? 0,
   });
 }
 
@@ -428,12 +461,18 @@ export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
 /** Reconcile popup snapshot with session meta + active flag without loading network bodies. */
 export async function readPopupStateForUi(): Promise<PopupStateResponse> {
   const snapshot = await readPopupStateSnapshot();
-  const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG, REDACTION_PREFERENCE_KEY]);
+  const raw = await chrome.storage.local.get([
+    STORAGE_KEY,
+    ACTIVE_FLAG,
+    REDACTION_PREFERENCE_KEY,
+    REDACTION_CONFIG_KEY,
+  ]);
   const persisted = raw[STORAGE_KEY] as PersistedSessionMeta | SessionData | undefined;
   const activeId = (raw[ACTIVE_FLAG] as string | null) ?? null;
   const storedRedaction = raw[REDACTION_PREFERENCE_KEY];
   const redactionEnabled =
     storedRedaction == null ? DEFAULT_REDACTION_ENABLED : storedRedaction !== false;
+  const redactionConfig = applyRedactionConfig(raw[REDACTION_CONFIG_KEY]);
 
   let session = normalizeSession(
     isLegacySessionData(persisted) ? persisted.session : (persisted?.session ?? null),
@@ -442,19 +481,25 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
     session = { ...session, active: Boolean(activeId && session.id === activeId) };
   }
 
-  if (!session) return popupStateFromSnapshot(snapshot, redactionEnabled);
+  if (!session) return { ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig };
 
   const snapshotActive = snapshot.session?.active ?? false;
   const snapshotId = snapshot.session?.id;
   if (session.active !== snapshotActive || session.id !== snapshotId) {
-    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled);
+    return {
+      ...popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled),
+      redactionConfig,
+    };
   }
 
   if (popupHealthStale(snapshot, session)) {
-    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled);
+    return {
+      ...popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled),
+      redactionConfig,
+    };
   }
 
-  return popupStateFromSnapshot(snapshot, redactionEnabled);
+  return { ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig };
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
@@ -576,20 +621,21 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
     network: nextStats.count,
     navigation: evidence.navigation.length,
     console: evidence.console.length,
+    markers: evidence.markers.length,
   });
 }
 
 async function appendBoundedEvidenceNow(
-  kind: "navigation" | "console",
-  entry: NavigationEntry | ConsoleEntry,
+  kind: "navigation" | "console" | "markers",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry,
 ): Promise<void> {
   const meta = await readPersistedMeta();
-  if (!meta.session?.active || meta.session.id !== entry.sessionId) return;
+  if (!meta.session?.active || meta.session.paused || meta.session.id !== entry.sessionId) return;
 
   const evidence = await readEvidence(entry.sessionId);
   const truncation = emptyTruncation();
   const redact = shouldRedact(meta.session);
-  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry;
+  const safeEntry = (redact ? redactDeep(entry) : entry) as NavigationEntry | ConsoleEntry | MarkerEntry;
   if (redact && kind === "console") {
     const consoleEntry = safeEntry as ConsoleEntry;
     consoleEntry.text = redactSensitiveString(consoleEntry.text);
@@ -606,7 +652,7 @@ async function appendBoundedEvidenceNow(
       truncation,
       "navigation",
     );
-  } else {
+  } else if (kind === "console") {
     pushWithCap(
       evidence.console,
       safeEntry as ConsoleEntry,
@@ -614,10 +660,18 @@ async function appendBoundedEvidenceNow(
       truncation,
       "console",
     );
+  } else {
+    pushWithCap(
+      evidence.markers,
+      safeEntry as MarkerEntry,
+      AUXILIARY_STORAGE_LIMITS.markerEntries,
+      truncation,
+      "markers",
+    );
   }
 
   await writeEvidence(entry.sessionId, evidence, redact);
-  const truncated = truncation[kind];
+  const truncated = truncation[kind] ?? 0;
   if (truncated > 0) {
     await patchSession((session) =>
       session ? bumpTruncation(session, { [kind]: truncated }) : session,
@@ -628,13 +682,14 @@ async function appendBoundedEvidenceNow(
       network: stats.count,
       navigation: evidence.navigation.length,
       console: evidence.console.length,
+      markers: evidence.markers.length,
     });
   }
 }
 
 function appendBoundedEvidence(
-  kind: "navigation" | "console",
-  entry: NavigationEntry | ConsoleEntry,
+  kind: "navigation" | "console" | "markers",
+  entry: NavigationEntry | ConsoleEntry | MarkerEntry,
 ): Promise<void> {
   const previous = evidenceQueues.get(entry.sessionId) ?? Promise.resolve();
   const next = previous.catch(() => undefined).then(() => appendBoundedEvidenceNow(kind, entry));
@@ -656,6 +711,10 @@ export async function appendNavigation(entry: NavigationEntry): Promise<void> {
 
 export async function appendConsole(entry: ConsoleEntry): Promise<void> {
   await appendBoundedEvidence("console", entry);
+}
+
+export async function appendMarker(entry: MarkerEntry): Promise<void> {
+  await appendBoundedEvidence("markers", entry);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {

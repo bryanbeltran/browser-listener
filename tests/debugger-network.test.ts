@@ -40,6 +40,8 @@ describe("CDP network capture", () => {
         requestId: "request-1",
         wallTime: 1_700_000_000,
         type: "Fetch",
+        documentURL: "https://example.test/page",
+        initiator: { type: "script", url: "https://example.test/app.js", lineNumber: 12 },
         request: { url: "https://example.test/api", method: "GET" },
       },
     );
@@ -53,6 +55,8 @@ describe("CDP network capture", () => {
           statusText: "Server Error",
           mimeType: "application/json",
           headers: { "content-type": "application/json" },
+          fromDiskCache: true,
+          connectionReused: true,
         },
       },
     );
@@ -68,5 +72,37 @@ describe("CDP network capture", () => {
     expect(entry?.timing?.start).toBe(1_700_000_000_000);
     expect(entry?.timing?.end).toBeTypeOf("number");
     expect(entry?.timing?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(entry?.documentUrl).toBe("https://example.test/page");
+    expect(entry?.initiator?.url).toBe("https://example.test/app.js");
+    expect(entry?.fromCache).toBe(true);
+    expect(entry?.connectionReused).toBe(true);
+  });
+
+  it("records an explicit scope filter instead of persisting out-of-scope requests", async () => {
+    const { writeSessionData } = await import("../src/persistence/store.js");
+    await writeSessionData({
+      ...(await readSessionData()),
+      session: {
+        ...(await readSessionData()).session!,
+        options: {
+          ...(await readSessionData()).session!.options,
+          allowedOrigins: ["https://example.test"],
+        },
+      },
+    });
+    const { registerDebuggerCapture } = await import("../src/capture/debugger-capture.js");
+    registerDebuggerCapture();
+    onEvent?.(
+      { tabId: 8 },
+      "Network.requestWillBeSent",
+      {
+        requestId: "filtered-request",
+        request: { url: "https://third-party.test/analytics", method: "GET" },
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const data = await readSessionData();
+    expect(data.network).toHaveLength(0);
+    expect(data.session?.health.filteredNetworkRequests).toBe(1);
   });
 });

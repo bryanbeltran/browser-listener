@@ -77,7 +77,13 @@ interface HarEntry {
     type: string;
     tabId?: number;
     frameId?: string;
+    documentUrl?: string;
+    redirectFromId?: string;
+    initiator?: NetworkEntry["initiator"];
+    isPreflight?: boolean;
     fromCache?: boolean;
+    fromServiceWorker?: boolean;
+    connectionReused?: boolean;
     bodyCaptured?: boolean;
     requestBodyTruncated?: boolean;
     responseBodyTruncated?: boolean;
@@ -188,7 +194,13 @@ function harEntry(entry: NetworkEntry): HarEntry {
       type: entry.type,
       tabId: entry.tabId,
       frameId: entry.frameId,
+      documentUrl: entry.documentUrl,
+      redirectFromId: entry.redirectFromId,
+      initiator: entry.initiator,
+      isPreflight: entry.isPreflight,
       fromCache: entry.fromCache,
+      fromServiceWorker: entry.fromServiceWorker,
+      connectionReused: entry.connectionReused,
       bodyCaptured: entry.bodyCaptured,
       requestBodyTruncated: entry.requestBodyTruncated,
       responseBodyTruncated: entry.responseBodyTruncated,

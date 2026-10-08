@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  emptySessionData,
   readPopupStateForUi,
   readPopupStateSnapshot,
+  writeSessionData,
 } from "../src/persistence/store.js";
 import { sampleSession } from "./helpers/fixtures.js";
 import { installChromeStorageMock, uninstallChromeStorageMock } from "./helpers/mock-chrome.js";
@@ -94,5 +96,40 @@ describe("session start", () => {
     const ui = await readPopupStateForUi();
     expect(ui.session?.active).toBe(true);
     expect(ui.session?.id).toBe(next.id);
+  });
+
+  it("snapshots an origin allowlist into the capture policy", async () => {
+    const { createSession } = await import("../src/capture/session-manager.js");
+    const session = await createSession(7, "https://example.test/problem", {
+      allowedOrigins: ["https://example.test/"],
+    });
+    expect(session.options.allowedOrigins).toEqual(["https://example.test"]);
+  });
+
+  it("rejects malformed origin policy before clearing existing evidence", async () => {
+    const { createSession } = await import("../src/capture/session-manager.js");
+    await expect(
+      createSession(7, "https://example.test/problem", { allowedOrigins: ["file:///tmp"] }),
+    ).rejects.toThrow("exact HTTP(S) origin");
+  });
+
+  it("records pause intervals and rejects pause requests without an active session", async () => {
+    const { pauseCapture, resumeCapture } = await import("../src/capture/session-manager.js");
+    expect(await pauseCapture()).toBeNull();
+    expect(await resumeCapture()).toBeNull();
+
+    const session = sampleSession({ active: true, paused: false, pauseIntervals: [] });
+    await writeSessionData({ ...emptySessionData(), session });
+    await chrome.storage.local.set({ browserListenerActiveSessionId: session.id });
+
+    const paused = await pauseCapture();
+    expect(paused?.paused).toBe(true);
+    expect(paused?.pauseIntervals).toHaveLength(1);
+    expect(paused?.pauseIntervals?.[0]?.endedAt).toBeUndefined();
+
+    const resumed = await resumeCapture();
+    expect(resumed?.paused).toBe(false);
+    expect(resumed?.pauseIntervals?.[0]?.endedAt).toBeTypeOf("number");
+    expect(resumed?.pauseIntervals?.[0]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 });

@@ -57,6 +57,15 @@ function evidenceData(): SessionData {
         source: "javascript",
       },
     ],
+    markers: [
+      {
+        id: "marker-1",
+        sessionId: "test-session-1",
+        timestamp: 3,
+        label: "User marker",
+        note: "Clicked submit",
+      },
+    ],
   };
 }
 
@@ -64,18 +73,27 @@ describe("coverage report", () => {
   it("summarizes generic evidence, field coverage, and quality signals", () => {
     const report = buildCoverageReport(evidenceData());
 
-    expect(report.schemaVersion).toBe(1);
+    expect(report.schemaVersion).toBe(3);
     expect(report.source.tabUrl).toContain("example.test");
+    expect(report.capture).toEqual({ paused: false, pauseIntervals: [] });
+    expect(report.policy).toEqual({
+      redactionEnabled: true,
+      captureBodies: false,
+      captureConsole: true,
+      allowedOrigins: [],
+    });
     expect(report.totals).toEqual({
       network: 2,
       navigation: 1,
       console: 1,
+      markers: 1,
       requestBodies: 0,
       responseBodies: 1,
     });
     expect(report.fields.network.responseBody).toMatchObject({ present: 1, total: 2, percent: 50 });
     expect(report.fields.navigation.title).toMatchObject({ present: 1, total: 1, percent: 100 });
     expect(report.fields.console.text).toMatchObject({ present: 1, total: 1, percent: 100 });
+    expect(report.fields.markers.note).toMatchObject({ present: 1, total: 1, percent: 100 });
     expect(report.quality).toEqual({
       networkTruncated: 2,
       navigationTruncated: 3,
@@ -84,6 +102,10 @@ describe("coverage report", () => {
       bodiesSkippedSessionCap: 2,
       healthGaps: 1,
       persistenceErrors: 1,
+      markersTruncated: 0,
+      filteredNetworkRequests: 0,
+      partial: true,
+      gapReasons: ["debugger_detach: canceled"],
     });
   });
 });

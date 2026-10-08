@@ -3,6 +3,8 @@ import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 import { emptyTruncation } from "../persistence/limits.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { buildCoverageReport } from "./coverage.js";
+import { REDACTION_RULE_SET_VERSION } from "../redaction/engine.js";
+import { buildRedactionAudit } from "../redaction/audit.js";
 
 export const REQUIRED_EXPORT_FILES = [
   "report.html",
@@ -11,20 +13,29 @@ export const REQUIRED_EXPORT_FILES = [
   "export-manifest.json",
 ] as const;
 
+export const EXPORT_MANIFEST_SCHEMA_VERSION = 3 as const;
+
 export function buildExportManifest(
   data: SessionData,
   files: ArtifactManifestEntry[] = baseManifestFiles(),
   coverage: CoverageReport = buildCoverageReport(data),
+  exportedAt = coverage.generatedAt,
 ): ExportManifest {
   const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
   return {
-    schemaVersion: 2,
+    schemaVersion: EXPORT_MANIFEST_SCHEMA_VERSION,
     format: "browser-listener",
     version: extensionVersion,
     extensionVersion,
     sessionId: data.session?.id ?? "none",
-    exportedAt: Date.now(),
+    exportedAt,
     privacy: {
+      schemaVersion: 1,
+      redactionRuleSetVersion: REDACTION_RULE_SET_VERSION,
+      audit: buildRedactionAudit(data),
+      captureBodies: data.session?.options?.captureBodies ?? false,
+      captureConsole: data.session?.options?.captureConsole ?? true,
+      scope: "active-tab",
       localOnly: true,
       remoteUpload: false,
       redactionEnabled: data.session?.options?.redactionEnabled !== false,
@@ -50,5 +61,6 @@ export function baseManifestFiles(): ArtifactManifestEntry[] {
     kind: path === "report.html" ? "report" : path === "raw.har" ? "har" : "json",
     optional: false,
     enabled: true,
+    schemaVersion: 1,
   }));
 }

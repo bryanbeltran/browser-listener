@@ -13,6 +13,7 @@ export const NETWORK_ENTRY_SOFT_CAP = NETWORK_STORE_LIMITS.entrySoftCap;
 export const AUXILIARY_STORAGE_LIMITS = {
   navigationEntries: 2_000,
   consoleEntries: 5_000,
+  markerEntries: 500,
 } as const;
 
 /** Body capture is opt-in and bounded independently from metadata storage. */
@@ -27,7 +28,7 @@ export const STORAGE_LIMITS = {
 } as const;
 
 export function emptyTruncation(): StorageTruncation {
-  return { network: 0, navigation: 0, console: 0 };
+  return { network: 0, navigation: 0, console: 0, markers: 0 };
 }
 
 export function estimateNetworkEntryBytes(entry: NetworkEntry): number {
@@ -45,7 +46,7 @@ export function totalNetworkBytes(entries: readonly NetworkEntry[]): number {
 }
 
 export function hasTruncation(t: StorageTruncation): boolean {
-  return t.network > 0 || t.navigation > 0 || t.console > 0;
+  return t.network > 0 || t.navigation > 0 || t.console > 0 || (t.markers ?? 0) > 0;
 }
 
 /** Ring-buffer helper (used in unit tests; production uses IndexedDB eviction). */
@@ -59,6 +60,6 @@ export function pushWithCap<T>(
   arr.push(item);
   if (arr.length > limit) {
     arr.shift();
-    truncation[bucket] += 1;
+    truncation[bucket] = (truncation[bucket] ?? 0) + 1;
   }
 }

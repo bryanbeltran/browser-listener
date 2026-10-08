@@ -3,38 +3,76 @@ import {
   DEFAULT_SENSITIVE_KEYS,
   DEFAULT_URL_PARAM_KEYS,
 } from "./defaults.js";
-import type { RedactionConfig } from "../shared/types.js";
+import type { RedactionConfig, RedactionRule } from "../shared/types.js";
 
 export const REDACTED = "[REDACTED]";
+export const REDACTION_RULE_SET_VERSION = "default-v1" as const;
 
 const DEFAULT_CONFIG: RedactionConfig = {
   sensitiveKeys: [...DEFAULT_SENSITIVE_KEYS],
   urlParamKeys: [...DEFAULT_URL_PARAM_KEYS],
+  objectSensitiveKeys: [...DEFAULT_OBJECT_SENSITIVE_KEYS],
   customRules: [],
 };
 
-const objectSensitiveKeys: string[] = [...DEFAULT_OBJECT_SENSITIVE_KEYS];
+function uniqueKeys(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))];
+}
+
+function validRules(rules: readonly RedactionRule[]): RedactionRule[] {
+  return rules.filter((rule) => {
+    if (!rule || typeof rule.pattern !== "string" || !rule.pattern) return false;
+    try {
+      new RegExp(rule.pattern, rule.flags);
+      return true;
+    } catch {
+      return false;
+    }
+  }).map((rule) => ({
+    pattern: rule.pattern,
+    ...(rule.flags ? { flags: rule.flags } : {}),
+    ...(rule.replacement != null ? { replacement: rule.replacement } : {}),
+  }));
+}
+
+function normalizedConfig(partial: Partial<RedactionConfig> = {}): RedactionConfig {
+  return {
+    sensitiveKeys: uniqueKeys([...DEFAULT_SENSITIVE_KEYS, ...(partial.sensitiveKeys ?? [])]),
+    urlParamKeys: uniqueKeys([...DEFAULT_URL_PARAM_KEYS, ...(partial.urlParamKeys ?? [])]),
+    objectSensitiveKeys: uniqueKeys([
+      ...DEFAULT_OBJECT_SENSITIVE_KEYS,
+      ...(partial.objectSensitiveKeys ?? []),
+    ]),
+    customRules: validRules(partial.customRules ?? []),
+  };
+}
 
 let config: RedactionConfig = { ...DEFAULT_CONFIG };
 
 export function setRedactionConfig(partial: Partial<RedactionConfig>): void {
-  config = {
+  config = normalizedConfig({
     sensitiveKeys: partial.sensitiveKeys ?? config.sensitiveKeys,
     urlParamKeys: partial.urlParamKeys ?? config.urlParamKeys,
+    objectSensitiveKeys: partial.objectSensitiveKeys ?? config.objectSensitiveKeys,
     customRules: partial.customRules ?? config.customRules,
-  };
+  });
 }
 
 export function getRedactionConfig(): RedactionConfig {
-  return config;
+  return {
+    sensitiveKeys: [...config.sensitiveKeys],
+    urlParamKeys: [...config.urlParamKeys],
+    objectSensitiveKeys: [...(config.objectSensitiveKeys ?? DEFAULT_OBJECT_SENSITIVE_KEYS)],
+    customRules: config.customRules.map((rule) => ({ ...rule })),
+  };
+}
+
+export function getDefaultRedactionConfig(): RedactionConfig {
+  return normalizedConfig();
 }
 
 export function resetRedactionConfig(): void {
-  config = {
-    sensitiveKeys: [...DEFAULT_SENSITIVE_KEYS],
-    urlParamKeys: [...DEFAULT_URL_PARAM_KEYS],
-    customRules: [],
-  };
+  config = normalizedConfig();
 }
 
 /** Header/cookie names — allow substring match (e.g. x-authorization-token). */
@@ -46,8 +84,15 @@ function isSensitiveHeaderName(name: string): boolean {
 /** Object field names — exact match only (avoid redacting sessionId, etc.). */
 function isSensitiveObjectKey(name: string): boolean {
   const lower = name.toLowerCase();
-  return objectSensitiveKeys.some((k) => lower === k.toLowerCase());
+  return (config.objectSensitiveKeys ?? DEFAULT_OBJECT_SENSITIVE_KEYS).some((k) => lower === k.toLowerCase());
 }
+
+const HIGH_CONFIDENCE_SECRET_PATTERNS = [
+  /-----BEGIN(?: [A-Z]+)? PRIVATE KEY-----[\s\S]+-----END(?: [A-Z]+)? PRIVATE KEY-----/i,
+  /\b(?:sk|pk)_(?:live|test)_[a-z0-9]{16,}\b/i,
+  /\bgh[pousr]_[a-z0-9]{20,}\b/i,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/,
+];
 
 export function redactString(value: string): string {
   let out = value;
@@ -82,7 +127,7 @@ export function redactHeaders(
   if (!headers) return undefined;
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
-    out[name] = isSensitiveHeaderName(name) ? REDACTED : redactString(value);
+    out[name] = isSensitiveHeaderName(name) ? REDACTED : redactSensitiveString(value);
   }
   return out;
 }
@@ -92,7 +137,7 @@ function looksSensitiveValue(value: string): boolean {
   if (DEFAULT_SENSITIVE_KEYS.some((k) => lower.includes(k))) return true;
   if (/bearer\s+[a-z0-9._-]+/i.test(value)) return true;
   if (/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/.test(value)) return true;
-  return false;
+  return HIGH_CONFIDENCE_SECRET_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 export function redactSensitiveString(value: string): string {
@@ -103,7 +148,7 @@ export function redactSensitiveString(value: string): string {
 /** Redact structured JSON or form bodies while preserving safe fields. */
 export function redactBodyText(value: string): string {
   try {
-    return JSON.stringify(redactDeep(JSON.parse(value)));
+    return redactSensitiveString(JSON.stringify(redactDeep(JSON.parse(value))));
   } catch {
     const params = new URLSearchParams(value);
     if (params.size > 0 && value.includes("=")) {

@@ -21,9 +21,12 @@ describe("export manifest", () => {
     expect(manifest.privacy.redactionEnabled).toBe(true);
     expect(manifest.version).toBe("0.3.21");
     expect(manifest.extensionVersion).toBe("0.3.21");
-    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.schemaVersion).toBe(3);
     expect(manifest.format).toBe("browser-listener");
-    expect(manifest.coverage.schemaVersion).toBe(1);
+    expect(manifest.coverage.schemaVersion).toBe(3);
+    expect(manifest.privacy.schemaVersion).toBe(1);
+    expect(manifest.privacy.redactionRuleSetVersion).toBe("default-v1");
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
+    expect(manifest.coverage.policy.redactionEnabled).toBe(true);
   });
 });

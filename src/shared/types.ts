@@ -5,6 +5,8 @@ export interface CaptureOptions {
   captureConsole: boolean;
   /** Redact sensitive values before persistence and export. */
   redactionEnabled: boolean;
+  /** Optional exact HTTP(S) origin allowlist; omitted means page plus dependencies. */
+  allowedOrigins?: string[];
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -42,10 +44,24 @@ export interface ConsoleEntry {
   args?: string[];
 }
 
+/** A user-authored point-in-time annotation that anchors human reproduction steps. */
+export interface MarkerEntry {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  label: string;
+  note?: string;
+  url?: string;
+  tabId?: number;
+  frameId?: number;
+}
+
 export interface StorageTruncation {
   network: number;
   navigation: number;
   console: number;
+  /** Added in export schema v3; optional for legacy session metadata. */
+  markers?: number;
 }
 
 export interface SessionHealth {
@@ -64,11 +80,18 @@ export interface SessionHealth {
   bodyBytesStored?: number;
   bodiesSkippedSessionCap?: number;
   bodiesPerResponseTruncated?: number;
+  filteredNetworkRequests?: number;
 }
 
 export interface HealthGap {
   at: number;
   reason: string;
+  durationMs?: number;
+}
+
+export interface PauseInterval {
+  startedAt: number;
+  endedAt?: number;
   durationMs?: number;
 }
 
@@ -85,6 +108,8 @@ export interface CaptureSession {
   options: CaptureOptions;
   health: SessionHealth;
   tabClosedDuringCapture?: boolean;
+  paused?: boolean;
+  pauseIntervals?: PauseInterval[];
 }
 
 /** Slim session fields for popup UI. */
@@ -94,6 +119,8 @@ export interface PopupSessionView {
   startedAt: number;
   stoppedAt?: number;
   tabClosedDuringCapture?: boolean;
+  paused?: boolean;
+  allowedOrigins?: string[];
   health: Pick<
     SessionHealth,
     "debuggerAttached" | "debuggerEverAttached" | "partialGaps" | "truncation" | "lastAttachError"
@@ -104,6 +131,7 @@ export interface PopupCounts {
   network: number;
   navigation: number;
   console: number;
+  markers?: number;
 }
 
 export interface PopupStateSnapshot {
@@ -122,12 +150,24 @@ export interface NetworkEntry {
   type: string;
   tabId?: number;
   frameId?: string;
+  documentUrl?: string;
+  redirectFromId?: string;
+  initiator?: {
+    type?: string;
+    url?: string;
+    requestId?: string;
+    lineNumber?: number;
+    columnNumber?: number;
+  };
+  isPreflight?: boolean;
   statusCode?: number;
   statusLine?: string;
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
   ip?: string;
   fromCache?: boolean;
+  fromServiceWorker?: boolean;
+  connectionReused?: boolean;
   error?: string;
   timing?: { start: number; end?: number; durationMs?: number };
   requestBody?: string;
@@ -145,6 +185,7 @@ export interface ArtifactManifestEntry {
   kind: "report" | "har" | "json" | "other";
   optional: boolean;
   enabled: boolean;
+  schemaVersion?: number;
   bytes?: number;
 }
 
@@ -156,17 +197,30 @@ export interface CoverageMetric {
 
 /** Machine-readable provenance and completeness summary for an export. */
 export interface CoverageReport {
-  schemaVersion: 1;
+  schemaVersion: 3;
   generatedAt: number;
   source: {
+    sessionId?: string;
+    extensionVersion?: string;
     tabUrl?: string;
     startedAt?: number;
     stoppedAt?: number;
+  };
+  capture: {
+    paused: boolean;
+    pauseIntervals: PauseInterval[];
+  };
+  policy: {
+    redactionEnabled: boolean;
+    captureBodies: boolean;
+    captureConsole: boolean;
+    allowedOrigins: string[];
   };
   totals: {
     network: number;
     navigation: number;
     console: number;
+    markers: number;
     requestBodies: number;
     responseBodies: number;
   };
@@ -184,6 +238,10 @@ export interface CoverageReport {
       text: CoverageMetric;
       source: CoverageMetric;
     };
+    markers: {
+      label: CoverageMetric;
+      note: CoverageMetric;
+    };
   };
   quality: {
     networkTruncated: number;
@@ -193,19 +251,41 @@ export interface CoverageReport {
     bodiesSkippedSessionCap: number;
     healthGaps: number;
     persistenceErrors: number;
+    markersTruncated: number;
+    filteredNetworkRequests: number;
+    partial: boolean;
+    gapReasons: string[];
   };
+}
+
+export interface PrivacyReceipt {
+  schemaVersion: 1;
+  redactionEnabled: boolean;
+  redactionRuleSetVersion: string;
+  audit: RedactionAudit;
+  captureBodies: boolean;
+  captureConsole: boolean;
+  scope: "active-tab";
+  localOnly: true;
+  remoteUpload: false;
+}
+
+export interface RedactionAudit {
+  schemaVersion: 1;
+  redactedValues: number;
+  redactedRecords: number;
 }
 
 export interface ExportManifest {
   /** Export contract version. */
-  schemaVersion: 2;
+  schemaVersion: 3;
   format: "browser-listener";
   /** Extension version at export time. */
   version: string;
   extensionVersion: string;
   sessionId: string;
   exportedAt: number;
-  privacy: { localOnly: true; remoteUpload: false; redactionEnabled: boolean };
+  privacy: PrivacyReceipt;
   options: CaptureOptions;
   files: ArtifactManifestEntry[];
   coverage: CoverageReport;
@@ -222,6 +302,7 @@ export interface SessionSummary {
     network: number;
     navigation: number;
     console: number;
+    markers?: number;
     requestBodies: number;
     responseBodies: number;
   };
@@ -233,6 +314,8 @@ export interface SessionData {
   network: NetworkEntry[];
   navigation: NavigationEntry[];
   console: ConsoleEntry[];
+  /** Optional for legacy persisted sessions; normalized reads always provide an array. */
+  markers?: MarkerEntry[];
 }
 
 export interface RedactionRule {
@@ -244,5 +327,6 @@ export interface RedactionRule {
 export interface RedactionConfig {
   sensitiveKeys: string[];
   urlParamKeys: string[];
+  objectSensitiveKeys?: string[];
   customRules: RedactionRule[];
 }

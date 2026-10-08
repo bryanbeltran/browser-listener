@@ -8,6 +8,7 @@ import { updateDebuggerHealth } from "../persistence/session-recovery.js";
 import { captureBodiesForRequest } from "./body-capture.js";
 import { getActiveSession } from "./session-manager.js";
 import type { ConsoleEntry, NetworkEntry } from "../shared/types.js";
+import { isOriginAllowed } from "../shared/urls.js";
 
 const CDP_VERSION = "1.3";
 const pendingCdp = new Map<string, Partial<NetworkEntry>>();
@@ -241,6 +242,7 @@ async function onDebuggerEvent(
 ): Promise<void> {
   const session = await getActiveSession();
   if (!session || source.tabId !== session.tabId) return;
+  if (session.paused) return;
   const p = (params ?? {}) as Record<string, unknown>;
 
   if (session.options.captureConsole && (method.startsWith("Runtime.") || method === "Log.entryAdded")) {
@@ -250,9 +252,27 @@ async function onDebuggerEvent(
 
   if (method === "Network.requestWillBeSent") {
     const request = p.request as
-      | { url?: string; method?: string; headers?: Record<string, string> }
+      | { url?: string; method?: string; headers?: Record<string, string>; documentURL?: string }
       | undefined;
+    if (!isOriginAllowed(request?.url, session.options.allowedOrigins)) {
+      await patchSession((current) =>
+        current
+          ? {
+              ...current,
+              health: {
+                ...current.health,
+                filteredNetworkRequests: (current.health.filteredNetworkRequests ?? 0) + 1,
+              },
+            }
+          : current,
+      );
+      return;
+    }
     const requestId = String(p.requestId ?? "");
+    const previous = pendingCdp.get(requestId) as NetworkEntry | undefined;
+    const initiator = p.initiator as
+      | { type?: string; url?: string; requestId?: string; lineNumber?: number; columnNumber?: number }
+      | undefined;
     const requestTimestamp = typeof p.wallTime === "number" ? eventTimestamp(p.wallTime) : Date.now();
     pendingCdp.set(requestId, {
       id: crypto.randomUUID(),
@@ -264,6 +284,10 @@ async function onDebuggerEvent(
       type: String(p.type ?? "other"),
       tabId: source.tabId,
       frameId: p.frameId != null ? String(p.frameId) : undefined,
+      documentUrl: typeof p.documentURL === "string" ? p.documentURL : request?.documentURL,
+      redirectFromId: previous?.id,
+      initiator,
+      isPreflight: String(p.type ?? "").toLowerCase() === "preflight",
       requestHeaders: request?.headers,
       timing: { start: requestTimestamp },
     });
@@ -277,6 +301,9 @@ async function onDebuggerEvent(
           statusText?: string;
           headers?: Record<string, string>;
           mimeType?: string;
+          fromDiskCache?: boolean;
+          fromServiceWorker?: boolean;
+          connectionReused?: boolean;
         }
       | undefined;
     const base = pendingCdp.get(requestId) ?? { requestId, sessionId: session.id };
@@ -296,6 +323,9 @@ async function onDebuggerEvent(
       responseHeaders: response?.headers,
       contentType,
       tabId: source.tabId,
+      fromCache: response?.fromDiskCache,
+      fromServiceWorker: response?.fromServiceWorker,
+      connectionReused: response?.connectionReused,
     };
     entry.timing = completedTiming(entry, responseTimestamp);
     pendingCdp.set(requestId, entry);

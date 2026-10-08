@@ -4,13 +4,15 @@ import { base64ToUint8 } from "../shared/bytes.js";
 import { downloadZipFromPage } from "../export/download.js";
 import { hasTruncation } from "../persistence/limits.js";
 import { REDACTION_PREFERENCE_KEY } from "../persistence/preferences.js";
+import { REDACTION_CONFIG_KEY } from "../persistence/preferences.js";
 import type { PopupStateResponse } from "../shared/messages.js";
+import type { RedactionConfig } from "../shared/types.js";
 import { readPopupState } from "./popup-state.js";
 import { sendMessageWithTimeout } from "./messaging.js";
 
 const EMPTY_STATE: PopupStateResponse = {
   session: null,
-  counts: { network: 0, navigation: 0, console: 0 },
+  counts: { network: 0, navigation: 0, console: 0, markers: 0 },
   canExport: false,
   redactionEnabled: true,
 };
@@ -26,8 +28,16 @@ const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
 const bodyCaptureCheckbox = el<HTMLInputElement>("body-capture-checkbox");
+const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
 const redactionWarning = el("redaction-warning");
+const redactionKeyList = el<HTMLTextAreaElement>("redaction-key-list");
+const redactionUrlKeyList = el<HTMLTextAreaElement>("redaction-url-key-list");
+const redactionObjectKeyList = el<HTMLTextAreaElement>("redaction-object-key-list");
+const redactionRulesJson = el<HTMLTextAreaElement>("redaction-rules-json");
+const redactionConfigStatus = el("redaction-config-status");
+const btnSaveRedactionConfig = el<HTMLButtonElement>("btn-save-redaction-config");
+const btnResetRedactionConfig = el<HTMLButtonElement>("btn-reset-redaction-config");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
@@ -39,9 +49,15 @@ const startError = el("start-error");
 const cNetwork = el("c-network");
 const cNavigation = el("c-navigation");
 const cConsole = el("c-console");
+const cMarkers = el("c-markers");
 const eNetwork = el("e-network");
 const eNavigation = el("e-navigation");
 const eConsole = el("e-console");
+const eMarkers = el("e-markers");
+const markerNote = el<HTMLInputElement>("marker-note");
+const btnMarker = el<HTMLButtonElement>("btn-marker");
+const btnPause = el<HTMLButtonElement>("btn-pause");
+const markerStatus = el("marker-status");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
   const t = session?.health?.truncation;
@@ -72,7 +88,7 @@ function debuggerHealthHint(session: PopupStateResponse["session"]): string {
 }
 
 function formatEntityCounts(counts: ExportEntityCounts): string {
-  return `${counts.network} network · ${counts.navigation} navigation · ${counts.console} console`;
+  return `${counts.network} network · ${counts.navigation} navigation · ${counts.console} console · ${counts.markers ?? 0} markers`;
 }
 
 function showExportEntities(counts?: ExportEntityCounts): void {
@@ -109,8 +125,43 @@ function setText(node: HTMLElement | null, text: string): void {
   if (node) node.textContent = text;
 }
 
+function listText(values: string[] | undefined): string {
+  return (values ?? []).join(", ");
+}
+
+function parseKeyList(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseOriginList(value: string | undefined): string[] | undefined {
+  const origins = parseKeyList(value);
+  return origins.length ? origins : undefined;
+}
+
+function activeRedactionConfigElement(): boolean {
+  const active = document.activeElement;
+  return active === redactionKeyList || active === redactionUrlKeyList || active === redactionObjectKeyList || active === redactionRulesJson || active === scopeOriginsInput;
+}
+
+function renderRedactionConfig(config: RedactionConfig | undefined, locked: boolean): void {
+  if (!config) return;
+  if (!activeRedactionConfigElement()) {
+    if (redactionKeyList) redactionKeyList.value = listText(config.sensitiveKeys);
+    if (redactionUrlKeyList) redactionUrlKeyList.value = listText(config.urlParamKeys);
+    if (redactionObjectKeyList) redactionObjectKeyList.value = listText(config.objectSensitiveKeys);
+    if (redactionRulesJson) redactionRulesJson.value = JSON.stringify(config.customRules, null, 2);
+  }
+  for (const control of [redactionKeyList, redactionUrlKeyList, redactionObjectKeyList, redactionRulesJson, btnSaveRedactionConfig, btnResetRedactionConfig]) {
+    if (control) control.disabled = locked;
+  }
+}
+
 function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true): void {
   const active = state.session?.active ?? false;
+  const paused = active && state.session?.paused === true;
   const canExport = state.canExport;
 
   loadingPanel?.classList.toggle("hidden", loaded);
@@ -121,20 +172,39 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   setText(cNetwork, String(state.counts.network));
   setText(cNavigation, String(state.counts.navigation));
   setText(cConsole, String(state.counts.console));
+  setText(cMarkers, String(state.counts.markers ?? 0));
   setText(eNetwork, String(state.counts.network));
   setText(eNavigation, String(state.counts.navigation));
   setText(eConsole, String(state.counts.console));
+  setText(eMarkers, String(state.counts.markers ?? 0));
   if (redactionCheckbox) {
     redactionCheckbox.checked = state.redactionEnabled;
     redactionCheckbox.disabled = active || canExport;
   }
+  if (scopeOriginsInput && !activeRedactionConfigElement()) {
+    scopeOriginsInput.value = state.session?.allowedOrigins?.join(", ") ?? scopeOriginsInput.value;
+  }
   redactionWarning?.classList.toggle("hidden", state.redactionEnabled);
+  renderRedactionConfig(state.redactionConfig, active || canExport);
 
   if (active && state.session) {
-    setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
+    setText(statusEl, paused ? "Capture paused" : `Session ${state.session.id.slice(0, 8)}…`);
+    statusEl?.classList.toggle("paused", paused);
     const trunc = truncationHint(state.session);
-    setText(healthHint, trunc || debuggerHealthHint(state.session));
+    setText(
+      healthHint,
+      paused ? "Paused — network, console, and navigation capture are suspended" : trunc || debuggerHealthHint(state.session),
+    );
   }
+
+  if (!active) statusEl?.classList.remove("paused");
+  if (btnPause) {
+    btnPause.textContent = paused ? "Resume capture" : "Pause capture";
+    btnPause.disabled = !active || stopRequested || pauseRequested;
+    btnPause.setAttribute("aria-pressed", String(paused));
+  }
+  if (btnMarker) btnMarker.disabled = !active || paused || stopRequested;
+  if (btnStop) btnStop.disabled = !active || stopRequested;
 
   if (canExport && state.session) {
     setText(
@@ -176,6 +246,7 @@ btnStart?.addEventListener("click", async () => {
         options: {
           captureBodies: bodyCaptureCheckbox?.checked ?? false,
           captureConsole: true,
+          allowedOrigins: parseOriginList(scopeOriginsInput?.value),
         },
       },
       30_000,
@@ -194,6 +265,7 @@ consentCheckbox?.addEventListener("change", () => {
 
 let captureActive = false;
 let stopRequested = false;
+let pauseRequested = false;
 
 async function requestStopAndExport(): Promise<void> {
   if (stopRequested) return;
@@ -220,6 +292,50 @@ async function requestStopAndExport(): Promise<void> {
 }
 
 btnStop?.addEventListener("click", () => void requestStopAndExport());
+
+async function togglePause(): Promise<void> {
+  if (pauseRequested || stopRequested) return;
+  try {
+    const state = await readPopupState();
+    if (!state.session?.active) return;
+    const shouldResume = state.session.paused === true;
+    pauseRequested = true;
+    if (btnPause) btnPause.disabled = true;
+    setText(statusEl, shouldResume ? "Resuming…" : "Pausing…");
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: shouldResume ? MessageType.RESUME_CAPTURE : MessageType.PAUSE_CAPTURE },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not change capture state");
+  } catch (err) {
+    setText(healthHint, err instanceof Error ? err.message : "Could not change capture state");
+  } finally {
+    pauseRequested = false;
+    await refresh();
+  }
+}
+
+btnPause?.addEventListener("click", () => void togglePause());
+
+btnMarker?.addEventListener("click", async () => {
+  if (btnMarker.disabled) return;
+  btnMarker.disabled = true;
+  setText(markerStatus, "Saving marker…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.ADD_MARKER, note: markerNote?.value ?? "" },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not save marker");
+    if (markerNote) markerNote.value = "";
+    setText(markerStatus, "Marker saved");
+    await refresh();
+  } catch (err) {
+    setText(markerStatus, err instanceof Error ? err.message : "Could not save marker");
+  } finally {
+    await refresh();
+  }
+});
 
 btnNewSession?.addEventListener("click", async () => {
   lastExportCounts = undefined;
@@ -258,6 +374,52 @@ redactionCheckbox?.addEventListener("change", async () => {
   }
 });
 
+btnSaveRedactionConfig?.addEventListener("click", async () => {
+  if (btnSaveRedactionConfig.disabled) return;
+  try {
+    const parsedRules = JSON.parse(redactionRulesJson?.value || "[]") as unknown;
+    if (!Array.isArray(parsedRules) || parsedRules.some((rule) => !rule || typeof rule !== "object" || typeof (rule as { pattern?: unknown }).pattern !== "string")) {
+      throw new Error("Custom rules must be a JSON array with string pattern fields");
+    }
+    btnSaveRedactionConfig.disabled = true;
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string; redactionConfig?: RedactionConfig }>(
+      {
+        type: MessageType.SET_REDACTION_CONFIG,
+        config: {
+          sensitiveKeys: parseKeyList(redactionKeyList?.value),
+          urlParamKeys: parseKeyList(redactionUrlKeyList?.value),
+          objectSensitiveKeys: parseKeyList(redactionObjectKeyList?.value),
+          customRules: parsedRules,
+        },
+      },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not save redaction rules");
+    setText(redactionConfigStatus, "Rules saved for future sessions");
+    await refresh();
+  } catch (err) {
+    setText(redactionConfigStatus, err instanceof Error ? err.message : "Could not save redaction rules");
+    if (btnSaveRedactionConfig) btnSaveRedactionConfig.disabled = false;
+  }
+});
+
+btnResetRedactionConfig?.addEventListener("click", async () => {
+  if (btnResetRedactionConfig.disabled) return;
+  btnResetRedactionConfig.disabled = true;
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.RESET_REDACTION_CONFIG },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not reset redaction rules");
+    setText(redactionConfigStatus, "Default rules restored");
+    await refresh();
+  } catch (err) {
+    setText(redactionConfigStatus, err instanceof Error ? err.message : "Could not reset redaction rules");
+    if (btnResetRedactionConfig) btnResetRedactionConfig.disabled = false;
+  }
+});
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (
@@ -265,6 +427,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     changes.browserListenerSessionData ||
     changes.browserListenerActiveSessionId ||
     changes[REDACTION_PREFERENCE_KEY]
+    || changes[REDACTION_CONFIG_KEY]
   ) {
     void refresh();
   }

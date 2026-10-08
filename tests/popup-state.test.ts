@@ -60,6 +60,7 @@ describe("popup state", () => {
       "browserListenerSessionData",
       "browserListenerActiveSessionId",
       "browserListenerRedactionEnabled",
+      "browserListenerRedactionConfig",
     ]);
   });
 
@@ -84,6 +85,22 @@ describe("popup state", () => {
           url: "https://example.test/api/items",
           method: "GET",
           type: "fetch",
+        },
+      ],
+    });
+    expect(state.canExport).toBe(true);
+  });
+
+  it("keeps marker-only captures exportable", () => {
+    const state = popupStateFromSessionData({
+      ...emptySessionData(),
+      session: sampleSession({ active: false }),
+      markers: [
+        {
+          id: "marker-1",
+          sessionId: "test-session-1",
+          timestamp: 1,
+          label: "User marker",
         },
       ],
     });

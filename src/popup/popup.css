@@ -72,15 +72,89 @@ h1 {
   font-size: 0.85rem;
 }
 
+.field-label {
+  display: block;
+  margin-top: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.text-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  font: inherit;
+}
+
 .advanced {
   margin: 8px 0;
   font-size: 0.8rem;
 }
 
+.redaction-config {
+  margin: 10px 0;
+  font-size: 0.8rem;
+}
+
+.redaction-config summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.redaction-config label {
+  display: block;
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.redaction-config textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  font: 12px ui-monospace, monospace;
+  resize: vertical;
+}
+
+.redaction-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.redaction-actions button {
+  flex: 1;
+  padding: 7px;
+}
+
 .counts {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
   margin: 10px 0;
+}
+
+.marker-controls {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.marker-controls label {
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.marker-controls input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid #8886;
+  border-radius: 6px;
+  font: inherit;
 }
 
 .export-entities {
@@ -120,6 +194,10 @@ button.secondary {
   color: #0a7;
 }
 
+.status.paused {
+  color: #a15c00;
+}
+
 .stop-hint {
   margin: 6px 0 0;
 }
@@ -149,6 +227,10 @@ button.secondary {
   }
 
   .hint.warning {
+    color: #ffcc80;
+  }
+
+  .status.paused {
     color: #ffcc80;
   }
 }

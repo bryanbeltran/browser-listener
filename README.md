@@ -12,6 +12,7 @@ Start capture only after explicit user activation, reproduce a problem, stop cap
 - Optional response/request bodies for safe JSON and text MIME types.
 - Browser navigation history.
 - Console logs, runtime exceptions, and browser log entries.
+- Pause/resume controls with recorded pause intervals.
 - Bounded storage with visible truncation and debugger health gaps.
 - Offline HTML report plus raw HAR and console artifacts.
 - ZIP inspector for CI, support, and local debugging workflows.
@@ -58,7 +59,7 @@ Redaction is enabled by default before persistence and again at export. The popu
 
 1. Popup grants explicit capture intent for current tab through `activeTab` and loads the persisted redaction preference.
 2. Service worker snapshots capture options, including redaction state, then creates session metadata and attaches CDP debugger.
-3. CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries.
+3. CDP records network lifecycle, optional safe bodies, navigation updates, console events, exceptions, and browser log entries. Pause temporarily suspends evidence capture while preserving the session.
 4. Storage keeps network data in IndexedDB and low-volume evidence in bounded local storage.
 5. Stop detaches CDP, snapshots health, builds four artifacts, and downloads ZIP locally.
 
@@ -84,6 +85,7 @@ Chrome displays its debugger warning while capture is active. MV3 service-worker
 - Request/response bodies: opt-in, safe MIME types, 256 KiB per body, 4 MiB per session.
 - Exports are observational captures, not guaranteed complete copies of a page.
 - `export-manifest.json` records field coverage, truncation, body skips, persistence errors, and debugger gaps.
+- Coverage records the capture policy and every pause interval so user-controlled gaps are explicit.
 - Treat opt-out exports as sensitive because HAR bodies and console records may contain secrets.
 
 ## Repository layout

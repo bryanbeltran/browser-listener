@@ -27,6 +27,7 @@ export function buildSessionSummary(data: SessionData): SessionSummary {
       network: data.network.length,
       navigation: data.navigation.length,
       console: data.console.length,
+      markers: data.markers?.length ?? 0,
       requestBodies: data.network.filter((entry) => entry.requestBody != null).length,
       responseBodies: data.network.filter((entry) => entry.responseBody != null).length,
     },

@@ -33,14 +33,23 @@ describe("E2E export pipeline", () => {
     expect(manifest.privacy.remoteUpload).toBe(false);
     expect(manifest.privacy.redactionEnabled).toBe(true);
     expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(REQUIRED_FILES);
-    expect(manifest.schemaVersion).toBe(2);
-    expect(manifest.coverage.schemaVersion).toBe(1);
+    expect(manifest.schemaVersion).toBe(3);
+    expect(manifest.coverage.schemaVersion).toBe(3);
     expect(manifest.coverage.source.tabUrl).toContain("example.test");
+    expect(manifest.coverage.capture.pauseIntervals).toEqual([]);
+    expect(manifest.coverage.policy.redactionEnabled).toBe(true);
     expect(har.log.version).toBe("1.2");
     expect(har.log.entries).toHaveLength(1);
     expect(har.log.entries[0].response.content.text).toContain('"items"');
     expect(har.log.pages).toHaveLength(1);
     expect(rawConsole).toHaveLength(1);
     expect(files["report.html"]).not.toContain('"items"');
+  });
+
+  it("materializes deterministically when the export timestamp is fixed", async () => {
+    const data = sampleExportSessionData();
+    const first = await buildZipFromSessionData(data, 1_700_000_000_000);
+    const second = await buildZipFromSessionData(data, 1_700_000_000_000);
+    expect(first).toEqual(second);
   });
 });

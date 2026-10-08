@@ -5,6 +5,11 @@ export const MessageType = {
   DISCARD_CAPTURE: "DISCARD_CAPTURE",
   CONSENT_AND_START: "CONSENT_AND_START",
   SET_REDACTION: "SET_REDACTION",
+  SET_REDACTION_CONFIG: "SET_REDACTION_CONFIG",
+  RESET_REDACTION_CONFIG: "RESET_REDACTION_CONFIG",
+  ADD_MARKER: "ADD_MARKER",
+  PAUSE_CAPTURE: "PAUSE_CAPTURE",
+  RESUME_CAPTURE: "RESUME_CAPTURE",
 } as const;
 
 export type MessageTypeName = (typeof MessageType)[keyof typeof MessageType];
@@ -14,12 +19,14 @@ export interface PopupStateResponse {
   counts: import("./types.js").PopupCounts;
   canExport: boolean;
   redactionEnabled: boolean;
+  redactionConfig?: import("./types.js").RedactionConfig;
 }
 
 export interface ExportEntityCounts {
   network: number;
   navigation: number;
   console: number;
+  markers?: number;
   requestBodies: number;
   responseBodies: number;
 }

@@ -33,4 +33,13 @@ describe("redaction engine", () => {
     }) as { htmlSummary: string };
     expect(html.htmlSummary).not.toContain("hunter2");
   });
+
+  it("redacts high-confidence secret shapes even without a sensitive field name", () => {
+    const out = redactHeaders({
+      "X-Debug": "sk_live_12345678901234567890",
+      "X-Key": "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+    });
+    expect(out?.["X-Debug"]).toBe(REDACTED);
+    expect(out?.["X-Key"]).toBe(REDACTED);
+  });
 });

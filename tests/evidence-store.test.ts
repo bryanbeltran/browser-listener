@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendConsole,
+  appendMarker,
   appendNavigation,
   emptySessionData,
   readSessionData,
@@ -46,5 +47,23 @@ describe("bounded session evidence", () => {
     expect(data.navigation[0]?.url).not.toContain("secret");
     expect(data.console).toHaveLength(1);
     expect(data.console[0]?.text).toBe("[REDACTED]");
+  });
+
+  it("persists bounded user markers and applies the active redaction policy", async () => {
+    const session = sampleSession({ active: true });
+    await appendMarker({
+      id: "marker-1",
+      sessionId: session.id,
+      timestamp: 3,
+      label: "User marker",
+      note: "token secret-value",
+      url: "https://example.test/problem?token=secret",
+      tabId: session.tabId,
+    });
+
+    const data = await readSessionData();
+    expect(data.markers).toHaveLength(1);
+    expect(data.markers?.[0]?.note).toBe("[REDACTED]");
+    expect(data.markers?.[0]?.url).not.toContain("secret");
   });
 });

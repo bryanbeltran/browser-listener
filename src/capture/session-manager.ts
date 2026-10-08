@@ -8,8 +8,8 @@ import {
   withSession,
 } from "../persistence/store.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
-import { isCaptureableUrl } from "../shared/urls.js";
-import { readRedactionPreference } from "../persistence/preferences.js";
+import { isCaptureableUrl, isOriginAllowed, normalizeOriginAllowlist } from "../shared/urls.js";
+import { loadRedactionConfig, readRedactionPreference } from "../persistence/preferences.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -30,6 +30,8 @@ export async function createSession(
   tabUrl: string | undefined,
   options: Partial<CaptureOptions> = {},
 ): Promise<CaptureSession> {
+  const allowedOrigins = normalizeOriginAllowlist(options.allowedOrigins);
+  await loadRedactionConfig();
   const redactionEnabled = await readRedactionPreference();
   const session: CaptureSession = {
     id: crypto.randomUUID(),
@@ -39,7 +41,14 @@ export async function createSession(
     tabId,
     tabUrl,
     extensionVersion: getExtensionVersion(),
-    options: { ...DEFAULT_CAPTURE_OPTIONS, ...options, redactionEnabled },
+    options: {
+      ...DEFAULT_CAPTURE_OPTIONS,
+      ...options,
+      ...(allowedOrigins == null ? {} : { allowedOrigins }),
+      redactionEnabled,
+    },
+    paused: false,
+    pauseIntervals: [],
     health: newHealth(),
   };
   await clearSessionData();
@@ -69,14 +78,59 @@ export async function activateCaptureSession(): Promise<CaptureSession | null> {
 export async function stopSession(opts?: { tabClosed?: boolean }): Promise<CaptureSession | null> {
   const data = await readSessionData();
   if (!data.session?.active) return data.session;
+  const stoppedAt = Date.now();
+  const pauseIntervals = [...(data.session.pauseIntervals ?? [])];
+  const openPause = pauseIntervals[pauseIntervals.length - 1];
+  if (openPause && openPause.endedAt == null) {
+    pauseIntervals[pauseIntervals.length - 1] = {
+      ...openPause,
+      endedAt: stoppedAt,
+      durationMs: Math.max(0, stoppedAt - openPause.startedAt),
+    };
+  }
   const stopped: CaptureSession = {
     ...data.session,
     active: false,
-    stoppedAt: Date.now(),
+    stoppedAt,
+    paused: false,
+    pauseIntervals,
     tabClosedDuringCapture: opts?.tabClosed ?? data.session.tabClosedDuringCapture,
   };
   await setSession(stopped);
   return stopped;
+}
+
+export async function pauseCapture(): Promise<CaptureSession | null> {
+  return withSession((data) => {
+    const session = data.session;
+    if (!session?.active || session.paused) return data;
+    return {
+      ...data,
+      session: {
+        ...session,
+        paused: true,
+        pauseIntervals: [...(session.pauseIntervals ?? []), { startedAt: Date.now() }],
+      },
+    };
+  }).then((data) => (data.session?.active ? data.session : null));
+}
+
+export async function resumeCapture(): Promise<CaptureSession | null> {
+  return withSession((data) => {
+    const session = data.session;
+    if (!session?.active || !session.paused) return data;
+    const intervals = [...(session.pauseIntervals ?? [])];
+    const last = intervals[intervals.length - 1];
+    const endedAt = Date.now();
+    if (last && last.endedAt == null) {
+      intervals[intervals.length - 1] = {
+        ...last,
+        endedAt,
+        durationMs: Math.max(0, endedAt - last.startedAt),
+      };
+    }
+    return { ...data, session: { ...session, paused: false, pauseIntervals: intervals } };
+  }).then((data) => (data.session?.active ? data.session : null));
 }
 
 export async function getActiveSession(): Promise<CaptureSession | null> {
@@ -95,6 +149,8 @@ export async function recordNavigation(tabId: number, url: string | undefined, t
   if (!url || !isCaptureableUrl(url)) return;
   const session = await getActiveSession();
   if (!session || session.tabId !== tabId) return;
+  if (session.paused) return;
+  if (!isOriginAllowed(url, session.options.allowedOrigins)) return;
   await updateSessionTabUrl(url);
   await appendNavigation({
     id: crypto.randomUUID(),

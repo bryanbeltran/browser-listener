@@ -24,31 +24,38 @@ export async function processSessionForExport(data: SessionData): Promise<Sessio
       stackTrace: entry.stackTrace ? redactSensitiveString(entry.stackTrace) : undefined,
       args: entry.args?.map((arg) => redactSensitiveString(arg)),
     })),
+    markers: (redacted.markers ?? []).map((entry) => ({
+      ...entry,
+      note: entry.note ? redactSensitiveString(entry.note) : undefined,
+    })),
   };
 }
 
-export async function buildZipFromSessionData(data: SessionData): Promise<Uint8Array> {
-  return buildZipBundle(await processSessionForExport(data));
+export async function buildZipFromSessionData(
+  data: SessionData,
+  exportedAt = Date.now(),
+): Promise<Uint8Array> {
+  return buildZipBundle(await processSessionForExport(data), exportedAt);
 }
 
-async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
-  const coverageReport = buildCoverageReport(data);
+async function buildZipBundle(data: SessionData, exportedAt: number): Promise<Uint8Array> {
+  const coverageReport = buildCoverageReport(data, exportedAt);
   const files = baseManifestFiles();
   const bundle = {
     reportHtml: generateReportHtml(data, coverageReport),
     rawHar: JSON.stringify(buildHar(data), null, 2),
     rawConsole: JSON.stringify(data.console, null, 2),
-    manifest: JSON.stringify(buildExportManifest(data, files, coverageReport), null, 2),
+    manifest: JSON.stringify(buildExportManifest(data, files, coverageReport, exportedAt), null, 2),
   };
-  return buildZip(zipFileMapFromExport(bundle));
+  return buildZip(zipFileMapFromExport(bundle), exportedAt);
 }
 
 export async function buildZipExport(): Promise<Uint8Array> {
   return buildZipFromSessionData(await readSessionData());
 }
 
-export function exportFilename(sessionId?: string | null): string {
-  return `browser-listener-${sessionId ?? "session"}-${Date.now()}.zip`;
+export function exportFilename(sessionId?: string | null, exportedAt = Date.now()): string {
+  return `browser-listener-${sessionId ?? "session"}-${exportedAt}.zip`;
 }
 
 /** Build ZIP bytes + filename + evidence counts for popup or background. */
@@ -59,10 +66,11 @@ export async function prepareZipExport(): Promise<{
 }> {
   const data = await readSessionData();
   const processed = await processSessionForExport(data);
-  const zip = await buildZipBundle(processed);
+  const exportedAt = Date.now();
+  const zip = await buildZipBundle(processed, exportedAt);
   return {
     zip,
-    filename: exportFilename(data.session?.id),
+    filename: exportFilename(data.session?.id, exportedAt),
     counts: buildSessionSummary(processed).counts,
   };
 }

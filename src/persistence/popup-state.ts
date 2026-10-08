@@ -7,7 +7,7 @@ export const POPUP_STATE_KEY = "browserListenerPopupState";
 export function emptyPopupStateSnapshot(): PopupStateSnapshot {
   return {
     session: null,
-    counts: { network: 0, navigation: 0, console: 0 },
+    counts: { network: 0, navigation: 0, console: 0, markers: 0 },
     canExport: false,
   };
 }
@@ -17,7 +17,7 @@ export function buildPopupStateSnapshot(
   counts: PopupCounts,
 ): PopupStateSnapshot {
   const active = Boolean(session?.active);
-  const hasEvidence = counts.network + counts.navigation + counts.console > 0;
+  const hasEvidence = counts.network + counts.navigation + counts.console + (counts.markers ?? 0) > 0;
   return {
     session: session
       ? {
@@ -26,6 +26,8 @@ export function buildPopupStateSnapshot(
           startedAt: session.startedAt,
           stoppedAt: session.stoppedAt,
           tabClosedDuringCapture: session.tabClosedDuringCapture,
+          allowedOrigins: session.options.allowedOrigins,
+          paused: session.paused,
           health: {
             debuggerAttached: session.health.debuggerAttached ?? false,
             debuggerEverAttached: session.health.debuggerEverAttached ?? false,
@@ -50,6 +52,7 @@ export function popupStateFromSnapshot(
       network: snapshot.counts?.network ?? 0,
       navigation: snapshot.counts?.navigation ?? 0,
       console: snapshot.counts?.console ?? 0,
+      markers: snapshot.counts?.markers ?? 0,
     },
     canExport: snapshot.canExport,
     redactionEnabled,

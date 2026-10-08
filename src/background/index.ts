@@ -3,7 +3,9 @@ import {
   activateCaptureSession,
   createSession,
   getActiveSession,
+  pauseCapture,
   recordNavigation,
+  resumeCapture,
   stopSession,
 } from "../capture/session-manager.js";
 import {
@@ -18,13 +20,20 @@ import { stopAndExportInBackground, stopCaptureAndPrepareZip } from "../capture/
 import { uint8ToBase64 } from "../shared/bytes.js";
 import {
   clearSessionData,
+  appendMarker,
   readSessionData,
 } from "../persistence/store.js";
-import { readRedactionPreference, setRedactionPreference } from "../persistence/preferences.js";
+import {
+  readRedactionConfig,
+  readRedactionPreference,
+  resetRedactionConfigPreference,
+  setRedactionConfigPreference,
+  setRedactionPreference,
+} from "../persistence/preferences.js";
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
-import type { CaptureOptions } from "../shared/types.js";
+import type { CaptureOptions, MarkerEntry } from "../shared/types.js";
 import { isCaptureableUrl } from "../shared/urls.js";
 
 async function startWithConsent(
@@ -87,16 +96,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case MessageType.GET_STATE: {
         const data = await readSessionData();
         const redactionEnabled = await readRedactionPreference();
-        const hasData = data.network.length > 0 || data.navigation.length > 0 || data.console.length > 0;
+        const redactionConfig = await readRedactionConfig();
+        const hasData =
+          data.network.length > 0 ||
+          data.navigation.length > 0 ||
+          data.console.length > 0 ||
+          (data.markers?.length ?? 0) > 0;
         return {
           session: data.session,
           counts: {
             network: data.network.length,
             navigation: data.navigation.length,
             console: data.console.length,
+            markers: data.markers?.length ?? 0,
           },
           canExport: !data.session?.active && hasData,
           redactionEnabled,
+          redactionConfig,
         };
       }
       case MessageType.SET_REDACTION: {
@@ -106,6 +122,53 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const redactionEnabled = message.redactionEnabled !== false;
         await setRedactionPreference(redactionEnabled);
         return { ok: true, redactionEnabled };
+      }
+      case MessageType.SET_REDACTION_CONFIG: {
+        if (await getActiveSession()) {
+          return { ok: false, error: "Stop capture before changing redaction rules" };
+        }
+        const redactionConfig = await setRedactionConfigPreference(message.config ?? {});
+        return { ok: true, redactionConfig };
+      }
+      case MessageType.RESET_REDACTION_CONFIG: {
+        if (await getActiveSession()) {
+          return { ok: false, error: "Stop capture before changing redaction rules" };
+        }
+        const redactionConfig = await resetRedactionConfigPreference();
+        return { ok: true, redactionConfig };
+      }
+      case MessageType.ADD_MARKER: {
+        const session = await getActiveSession();
+        if (!session || session.paused) return { ok: false, error: "Resume capture before adding a marker" };
+        const note = typeof message.note === "string" ? message.note.trim().slice(0, 500) : "";
+        let url = session.tabUrl;
+        try {
+          const tab = await chrome.tabs.get(session.tabId);
+          url = tab.url ?? url;
+        } catch {
+          // The session snapshot remains the source of truth when the tab is unavailable.
+        }
+        const marker: MarkerEntry = {
+          id: crypto.randomUUID(),
+          sessionId: session.id,
+          timestamp: Date.now(),
+          label: "User marker",
+          note: note || undefined,
+          url,
+          tabId: session.tabId,
+        };
+        await appendMarker(marker);
+        return { ok: true, markerId: marker.id };
+      }
+      case MessageType.PAUSE_CAPTURE: {
+        const session = await pauseCapture();
+        if (!session) return { ok: false, error: "No active capture session" };
+        return { ok: true, paused: session.paused ?? false };
+      }
+      case MessageType.RESUME_CAPTURE: {
+        const session = await resumeCapture();
+        if (!session) return { ok: false, error: "No active capture session" };
+        return { ok: true, paused: session.paused ?? false };
       }
       case MessageType.CONSENT_AND_START: {
         const tabId = message.tabId as number | undefined;

@@ -1,4 +1,5 @@
 import { buildCoverageReport } from "../export/coverage.js";
+import { buildRedactionAudit } from "../redaction/audit.js";
 import type { CoverageReport, SessionData } from "../shared/types.js";
 
 export function generateReportHtml(
@@ -20,9 +21,14 @@ export function generateReportHtml(
   const summary = {
     session: data.session,
     coverage,
+    privacy: {
+      redactionEnabled: data.session?.options?.redactionEnabled !== false,
+      audit: buildRedactionAudit(data),
+    },
     navigation: data.navigation,
     console: reportConsole,
     network: reportNetwork,
+    markers: data.markers ?? [],
   };
   const json = JSON.stringify(summary).replace(/</g, "\\u003c");
 
@@ -93,6 +99,7 @@ if(s){
 summaryHtml+='<div class="stat-grid">';
 for(const [key,value] of Object.entries(c.totals)) summaryHtml+='<div class="stat"><strong>'+esc(value)+'</strong><br><span class="muted">'+esc(key)+'</span></div>';
 summaryHtml+='</div><p><button type="button" class="action-button" id="copy-citation">Copy citation</button><span class="muted citation-status" id="citation-status" aria-live="polite"></span></p>';
+summaryHtml+='<p class="muted"><strong>Redaction:</strong> '+(DATA.privacy.redactionEnabled?'enabled':'disabled — treat this export as sensitive')+' · '+esc(DATA.privacy.audit.redactedValues)+' value(s) replaced across '+esc(DATA.privacy.audit.redactedRecords)+' record(s)</p>';
 document.getElementById('summary').innerHTML=summaryHtml;
 
 let coverageHtml='<h2>Coverage &amp; provenance</h2><p class="muted">Generated '+formatDate(c.generatedAt)+' · schema v'+esc(c.schemaVersion)+'</p>';
@@ -105,13 +112,29 @@ coverageHtml+='<h3>Field coverage</h3>'+table(['Field','Present'],[
   ['Navigation · URL',metricText(c.fields.navigation.url)],
   ['Console · text',metricText(c.fields.console.text)],
   ['Console · source',metricText(c.fields.console.source)],
+  ['Markers · label',metricText(c.fields.markers?.label)],
+  ['Markers · note',metricText(c.fields.markers?.note)],
 ]);
-coverageHtml+='<h3>Quality signals</h3>'+table(['Signal','Count'],Object.entries(c.quality).map(([key,value])=>[esc(key),esc(value)]));
+coverageHtml+='<h3>Quality signals</h3>'+table(['Signal','Value'],Object.entries(c.quality).map(([key,value])=>[esc(key),esc(value)]));
+coverageHtml+='<p class="'+(c.quality.partial?'health-warn':'muted')+'"><strong>Completeness:</strong> '+(c.quality.partial?'Partial capture — review gaps before relying on absence.':'No recorded completeness gaps')+'</p>';
+coverageHtml+='<h3>Capture policy</h3>'+table(['Setting','Value'],[
+  ['Redaction',c.policy?.redactionEnabled?'enabled':'disabled'],
+  ['Request/response bodies',c.policy?.captureBodies?'enabled':'disabled'],
+  ['Console capture',c.policy?.captureConsole?'enabled':'disabled'],
+  ['Allowed origins',c.policy?.allowedOrigins?.length?c.policy.allowedOrigins.join(', '):'page and dependencies'],
+]);
+const pauses=c.capture?.pauseIntervals||[];
+coverageHtml+='<h3>Pause intervals</h3>'+(pauses.length?table(['Started','Ended','Duration'],pauses.map(interval=>[
+  esc(formatDate(interval.startedAt)),
+  esc(formatDate(interval.endedAt)),
+  esc(interval.durationMs==null?'—':String(interval.durationMs)+' ms'),
+])):'<p class="muted">No pause intervals recorded</p>');
 document.getElementById('coverage').innerHTML=coverageHtml;
 
 const events=[
   ...DATA.navigation.map(entry=>({time:entry.timestamp,type:'navigation',label:entry.title||entry.url,detail:entry.url})),
   ...DATA.console.map(entry=>({time:entry.timestamp,type:'console '+entry.level,label:entry.text,detail:entry.url||entry.source||''})),
+  ...(DATA.markers||[]).map(entry=>({time:entry.timestamp,type:'marker',label:entry.note||entry.label,detail:entry.url||''})),
   ...DATA.network.map(entry=>({time:entry.timestamp,type:'network',label:entry.method+' '+entry.type,detail:entry.statusCode+' '+entry.url})),
 ].sort((a,b)=>a.time-b.time);
 let timelineHtml='<h2>Evidence timeline</h2><div class="search-controls"><label for="timeline-search"><strong>Filter evidence</strong></label><input id="timeline-search" type="search" placeholder="Search URL, console text, or event type" /><span id="search-count" class="muted" aria-live="polite"></span></div>';

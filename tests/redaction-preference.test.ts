@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emptySessionData, readSessionData, writeSessionData } from "../src/persistence/store.js";
 import {
+  readRedactionConfig,
   readRedactionPreference,
+  resetRedactionConfigPreference,
+  setRedactionConfigPreference,
   setRedactionPreference,
 } from "../src/persistence/preferences.js";
 import { REDACTED } from "../src/redaction/engine.js";
@@ -135,5 +138,21 @@ describe("redaction preference", () => {
 
     const reloaded = await import("../src/persistence/preferences.js");
     expect(await reloaded.readRedactionPreference()).toBe(false);
+  });
+
+  it("persists custom redaction rules while retaining built-in defaults", async () => {
+    const saved = await setRedactionConfigPreference({
+      sensitiveKeys: ["customer_secret"],
+      urlParamKeys: ["tracking_secret"],
+      objectSensitiveKeys: ["private_note"],
+      customRules: [{ pattern: "internal-[0-9]+", replacement: "internal-[REDACTED]" }],
+    });
+    expect(saved.sensitiveKeys).toContain("authorization");
+    expect(saved.sensitiveKeys).toContain("customer_secret");
+    expect((await readRedactionConfig()).customRules[0]?.replacement).toBe("internal-[REDACTED]");
+
+    await resetRedactionConfigPreference();
+    expect((await readRedactionConfig()).customRules).toEqual([]);
+    expect((await readRedactionConfig()).sensitiveKeys).toContain("authorization");
   });
 });
