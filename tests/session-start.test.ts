@@ -17,7 +17,7 @@ describe("session start", () => {
 
   it("writes popup snapshot immediately when capture is activated", async () => {
     const { createSession, activateCaptureSession } = await import("../src/capture/session-manager.js");
-    await createSession(42, "https://www.facebook.com/groups/test", {});
+    await createSession(42, "https://example.test/problem", {});
     let snapshot = await readPopupStateSnapshot();
     expect(snapshot.session?.active).toBe(false);
 
@@ -87,7 +87,7 @@ describe("session start", () => {
     });
 
     const { createSession, activateCaptureSession } = await import("../src/capture/session-manager.js");
-    const next = await createSession(7, "https://www.facebook.com/groups/test", {});
+    const next = await createSession(7, "https://example.test/next-problem", {});
     await activateCaptureSession();
 
     expect(next.id).not.toBe(session.id);

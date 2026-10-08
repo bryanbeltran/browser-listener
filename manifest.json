@@ -1,20 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Browser Listener",
-  "version": "0.3.24",
-  "description": "Capture consented Facebook activity locally and export a searchable, portable archive. No upload or telemetry.",
+  "version": "0.3.25",
+  "description": "Capture an authorized browser session locally and export a redacted, portable evidence bundle. No upload or telemetry.",
   "permissions": [
     "storage",
     "unlimitedStorage",
     "downloads",
-    "tabs",
-    "webRequest",
-    "debugger",
-    "webNavigation"
-  ],
-  "host_permissions": [
-    "https://facebook.com/*",
-    "https://*.facebook.com/*"
+    "activeTab",
+    "debugger"
   ],
   "background": {
     "service_worker": "background.js",

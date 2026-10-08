@@ -12,19 +12,18 @@ export function buildZip(files: ZipFileMap): Uint8Array {
 
 export function zipFileMapFromExport(bundle: {
   reportHtml: string;
-  traceSummary: string;
+  session: string;
+  network: string;
+  console: string;
   coverageReport: string;
   manifest: string;
-  graphqlCaptures?: string;
-  groupActivity?: string;
 }): ZipFileMap {
-  const map: ZipFileMap = {
+  return {
     "report.html": bundle.reportHtml,
-    "trace-summary.json": bundle.traceSummary,
+    "session.json": bundle.session,
+    "network.json": bundle.network,
+    "console.json": bundle.console,
     "coverage-report.json": bundle.coverageReport,
     "export-manifest.json": bundle.manifest,
   };
-  if (bundle.graphqlCaptures) map["graphql-captures.json"] = bundle.graphqlCaptures;
-  if (bundle.groupActivity) map["group-activity.json"] = bundle.groupActivity;
-  return map;
 }

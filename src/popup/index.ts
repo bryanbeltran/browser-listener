@@ -9,7 +9,7 @@ import { sendMessageWithTimeout } from "./messaging.js";
 
 const EMPTY_STATE: PopupStateResponse = {
   session: null,
-  counts: { network: 0 },
+  counts: { network: 0, navigation: 0, console: 0 },
   canExport: false,
 };
 
@@ -23,6 +23,7 @@ const activePanel = el("active-panel");
 const exportPanel = el("export-panel");
 const btnStart = el<HTMLButtonElement>("btn-start");
 const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
+const bodyCaptureCheckbox = el<HTMLInputElement>("body-capture-checkbox");
 const btnStop = el<HTMLButtonElement>("btn-stop");
 const btnNewSession = el<HTMLButtonElement>("btn-new-session");
 const statusEl = el("status");
@@ -32,12 +33,21 @@ const exportHint = el("export-hint");
 const exportEntities = el("export-entities");
 const startError = el("start-error");
 const cNetwork = el("c-network");
+const cNavigation = el("c-navigation");
+const cConsole = el("c-console");
 const eNetwork = el("e-network");
+const eNavigation = el("e-navigation");
+const eConsole = el("e-console");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
   const t = session?.health?.truncation;
   if (!t || !hasTruncation(t)) return "";
-  return `Truncated: network −${t.network}`;
+  const parts = [
+    t.network ? `network −${t.network}` : "",
+    t.navigation ? `navigation −${t.navigation}` : "",
+    t.console ? `console −${t.console}` : "",
+  ].filter(Boolean);
+  return parts.length ? `Truncated: ${parts.join(", ")}` : "";
 }
 
 function debuggerHealthHint(session: PopupStateResponse["session"]): string {
@@ -46,7 +56,7 @@ function debuggerHealthHint(session: PopupStateResponse["session"]): string {
   const gaps = session.health?.partialGaps ?? [];
   const attachErr = session.health?.lastAttachError;
   const attachGap = gaps.find((g) => g.reason.startsWith("debugger_attach_failed"));
-  if (dbg) return "Debugger attached — GraphQL body capture active";
+  if (dbg) return "Debugger attached — network and console capture active";
   if (attachErr) return `Attach failed: ${attachErr}`;
   if (attachGap) {
     return attachGap.reason.replace(/^debugger_attach_failed:\s*/, "Attach failed: ");
@@ -58,7 +68,7 @@ function debuggerHealthHint(session: PopupStateResponse["session"]): string {
 }
 
 function formatEntityCounts(counts: ExportEntityCounts): string {
-  return `${counts.posts} posts · ${counts.comments} comments · ${counts.reactions} reactions`;
+  return `${counts.network} network · ${counts.navigation} navigation · ${counts.console} console`;
 }
 
 function showExportEntities(counts?: ExportEntityCounts): void {
@@ -105,7 +115,11 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   exportPanel?.classList.toggle("hidden", !loaded || active || !canExport);
 
   setText(cNetwork, String(state.counts.network));
+  setText(cNavigation, String(state.counts.navigation));
+  setText(cConsole, String(state.counts.console));
   setText(eNetwork, String(state.counts.network));
+  setText(eNavigation, String(state.counts.navigation));
+  setText(eConsole, String(state.counts.console));
 
   if (active && state.session) {
     setText(statusEl, `Session ${state.session.id.slice(0, 8)}…`);
@@ -145,9 +159,16 @@ btnStart?.addEventListener("click", async () => {
   showStartError("");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id == null) throw new Error("No active tab — open Facebook first");
+    if (tab?.id == null) throw new Error("No active tab — open a regular web page first");
     const res = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
-      { type: MessageType.CONSENT_AND_START, tabId: tab.id },
+      {
+        type: MessageType.CONSENT_AND_START,
+        tabId: tab.id,
+        options: {
+          captureBodies: bodyCaptureCheckbox?.checked ?? false,
+          captureConsole: true,
+        },
+      },
       30_000,
     );
     if (!res?.ok) throw new Error(res.error ?? "Could not start capture");

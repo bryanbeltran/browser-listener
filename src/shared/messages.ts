@@ -10,17 +10,16 @@ export type MessageTypeName = (typeof MessageType)[keyof typeof MessageType];
 
 export interface PopupStateResponse {
   session: import("./types.js").PopupSessionView | null;
-  counts: {
-    network: number;
-  };
+  counts: import("./types.js").PopupCounts;
   canExport: boolean;
 }
 
 export interface ExportEntityCounts {
   network: number;
-  posts: number;
-  comments: number;
-  reactions: number;
+  navigation: number;
+  console: number;
+  requestBodies: number;
+  responseBodies: number;
 }
 
 export interface ExportZipResponse {

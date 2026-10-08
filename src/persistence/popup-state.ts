@@ -1,5 +1,5 @@
 import { emptyTruncation } from "./limits.js";
-import type { CaptureSession, PopupStateSnapshot } from "../shared/types.js";
+import type { CaptureSession, PopupStateSnapshot, PopupCounts } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 
 export const POPUP_STATE_KEY = "browserListenerPopupState";
@@ -7,16 +7,17 @@ export const POPUP_STATE_KEY = "browserListenerPopupState";
 export function emptyPopupStateSnapshot(): PopupStateSnapshot {
   return {
     session: null,
-    counts: { network: 0 },
+    counts: { network: 0, navigation: 0, console: 0 },
     canExport: false,
   };
 }
 
 export function buildPopupStateSnapshot(
   session: CaptureSession | null,
-  networkCount: number,
+  counts: PopupCounts,
 ): PopupStateSnapshot {
   const active = Boolean(session?.active);
+  const hasEvidence = counts.network + counts.navigation + counts.console > 0;
   return {
     session: session
       ? {
@@ -34,15 +35,19 @@ export function buildPopupStateSnapshot(
           },
         }
       : null,
-    counts: { network: networkCount },
-    canExport: !active && networkCount > 0,
+    counts,
+    canExport: !active && hasEvidence,
   };
 }
 
 export function popupStateFromSnapshot(snapshot: PopupStateSnapshot): PopupStateResponse {
   return {
     session: snapshot.session,
-    counts: snapshot.counts,
+    counts: {
+      network: snapshot.counts?.network ?? 0,
+      navigation: snapshot.counts?.navigation ?? 0,
+      console: snapshot.counts?.console ?? 0,
+    },
     canExport: snapshot.canExport,
   };
 }

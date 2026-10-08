@@ -1,167 +1,46 @@
 export interface CaptureOptions {
-  /** CDP capture of GraphQL request+response bodies on facebook.com. */
-  graphqlBodies: boolean;
-  /** During capture, slowly sample Like/Love/Haha reactors for engaged posts. */
-  reactionHydration: boolean;
+  /** Capture response/request bodies when their MIME type is safe and the user opts in. */
+  captureBodies: boolean;
+  /** Capture browser console, runtime exception, and log events. */
+  captureConsole: boolean;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
-  graphqlBodies: true,
-  reactionHydration: true,
+  captureBodies: false,
+  captureConsole: true,
 };
 
-/** Where a post was encountered while browsing. */
-export type FacebookSurface = "group" | "timeline" | "page" | "unknown";
-
-/** Optional downstream annotation; the core extension does not infer stance. */
-export interface FacebookCauseTag {
-  cause: string;
-  stance: "pro" | "anti" | "neutral";
-}
-
-export interface FacebookLinkedReaction {
-  userId: string;
-  userName: string;
-  /** Like, Love, etc. when captured from GraphQL. */
-  reactionType?: string;
-}
-
-export interface FacebookGroupSummary {
+export interface NavigationEntry {
   id: string;
-  name?: string;
+  sessionId: string;
+  timestamp: number;
+  url: string;
+  title?: string;
+  tabId?: number;
+  frameId?: number;
+}
+
+export type ConsoleLevel = "verbose" | "debug" | "info" | "log" | "warning" | "error";
+
+export interface ConsoleEntry {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  level: ConsoleLevel | string;
+  text: string;
+  tabId?: number;
+  source?: string;
   url?: string;
-  /** e.g. "53.8K members" from group_member_profiles */
-  memberCountText?: string;
-}
-
-export interface FacebookGroupMember {
-  userId: string;
-  name: string;
-  groupId?: string;
-  groupName?: string;
-  role?: string;
-  source: string;
-}
-
-export interface FacebookMediaAttachment {
-  id?: string;
-  type: "photo" | "video" | "link" | "other";
-  caption?: string;
-  width?: number;
-  height?: number;
-}
-
-export interface FacebookShareInfo {
-  originalPostId?: string;
-  originalAuthorName?: string;
-  originalText?: string;
-  originalUrl?: string;
-}
-
-export interface FacebookPerson {
-  id: string;
-  name: string;
-  url?: string;
-  source: string;
-}
-
-export interface FacebookPost {
-  id: string;
-  postId?: string;
-  feedbackId?: string;
-  text?: string;
-  authorId?: string;
-  authorName?: string;
-  createdAt?: number;
-  url?: string;
-  surface?: FacebookSurface;
-  groupId?: string;
-  groupName?: string;
-  source: string;
-  partialParse?: boolean;
-  reactionCount?: number;
-  linkedReactions?: FacebookLinkedReaction[];
-  commentCount?: number;
-  linkedComments?: {
-    id: string;
-    authorId?: string;
-    authorName?: string;
-    text?: string;
-    createdAt?: number;
-    reactionCount?: number;
-    linkedReactions?: FacebookLinkedReaction[];
-  }[];
-  media?: FacebookMediaAttachment[];
-  share?: FacebookShareInfo;
-  causeTags?: FacebookCauseTag[];
-}
-
-export interface FacebookComment {
-  id: string;
-  feedbackId?: string;
-  text?: string;
-  authorId?: string;
-  authorName?: string;
-  createdAt?: number;
-  postId?: string;
-  source: string;
-  reactionCount?: number;
-  linkedReactions?: FacebookLinkedReaction[];
-  causeTags?: FacebookCauseTag[];
-}
-
-export interface FacebookReaction {
-  feedbackId?: string;
-  postId?: string;
-  commentId?: string;
-  target?: "post" | "comment";
-  userId: string;
-  userName: string;
-  reactionType?: string;
-  reactionCount?: number;
-  source: string;
-  /** Author of the post or comment that was reacted to. */
-  targetAuthorId?: string;
-  /** Truncated text of the reacted-to post or comment. */
-  targetText?: string;
-  /** Post id of the reacted-to content (post or parent of comment). */
-  targetPostId?: string;
-}
-
-/** Flat edge for classifiers — one observable user action. */
-export interface FacebookUserActivitySignal {
-  userId?: string;
-  userName?: string;
-  /** True when userId is a stable Facebook numeric id (not name-only inference). */
-  userIdResolved: boolean;
-  actionType: "post" | "comment" | "reaction";
-  targetId?: string;
-  targetType?: "post" | "comment" | "reaction";
-  text?: string;
-  reactionType?: string;
-  postId?: string;
-  commentId?: string;
-  source: string;
-}
-
-export interface FacebookGroupActivity {
-  groups: FacebookGroupSummary[];
-  members: FacebookGroupMember[];
-  people: FacebookPerson[];
-  posts: FacebookPost[];
-  comments: FacebookComment[];
-  reactions: FacebookReaction[];
-  graphqlQueryHints: { docId: string; friendlyName?: string; count: number }[];
-  sessionPermalink?: string;
-  parseWarnings?: string[];
-}
-
-export interface SessionEnrichments {
-  facebookGroups?: FacebookGroupActivity;
+  lineNumber?: number;
+  columnNumber?: number;
+  stackTrace?: string;
+  args?: string[];
 }
 
 export interface StorageTruncation {
   network: number;
+  navigation: number;
+  console: number;
 }
 
 export interface SessionHealth {
@@ -174,12 +53,12 @@ export interface SessionHealth {
   serviceWorkerRestarts: number;
   partialGaps: HealthGap[];
   persistenceErrors: string[];
-  /** Last chrome.debugger.attach / Network.enable failure, if any. */
+  /** Last chrome.debugger.attach / CDP domain enable failure, if any. */
   lastAttachError?: string;
   truncation: StorageTruncation;
-  apiBodyBytesStored?: number;
-  apiBodiesSkippedSessionCap?: number;
-  apiBodiesPerResponseTruncated?: number;
+  bodyBytesStored?: number;
+  bodiesSkippedSessionCap?: number;
+  bodiesPerResponseTruncated?: number;
 }
 
 export interface HealthGap {
@@ -203,7 +82,7 @@ export interface CaptureSession {
   tabClosedDuringCapture?: boolean;
 }
 
-/** Slim session fields for popup UI (stored without network / GraphQL bodies). */
+/** Slim session fields for popup UI. */
 export interface PopupSessionView {
   id: string;
   active: boolean;
@@ -216,9 +95,15 @@ export interface PopupSessionView {
   >;
 }
 
+export interface PopupCounts {
+  network: number;
+  navigation: number;
+  console: number;
+}
+
 export interface PopupStateSnapshot {
   session: PopupSessionView | null;
-  counts: { network: number };
+  counts: PopupCounts;
   canExport: boolean;
 }
 
@@ -270,41 +155,37 @@ export interface CoverageReport {
   generatedAt: number;
   source: {
     tabUrl?: string;
-    sessionPermalink?: string;
     startedAt?: number;
     stoppedAt?: number;
   };
   totals: {
     network: number;
-    groups: number;
-    members: number;
-    people: number;
-    posts: number;
-    comments: number;
-    reactions: number;
+    navigation: number;
+    console: number;
+    requestBodies: number;
+    responseBodies: number;
   };
   fields: {
-    posts: {
-      text: CoverageMetric;
-      authorId: CoverageMetric;
+    network: {
+      statusCode: CoverageMetric;
+      responseHeaders: CoverageMetric;
+      responseBody: CoverageMetric;
+    };
+    navigation: {
+      title: CoverageMetric;
       url: CoverageMetric;
     };
-    comments: {
+    console: {
       text: CoverageMetric;
-      authorId: CoverageMetric;
-      postId: CoverageMetric;
-    };
-    reactions: {
-      userId: CoverageMetric;
-      targetId: CoverageMetric;
-      targetText: CoverageMetric;
-      reactionType: CoverageMetric;
+      source: CoverageMetric;
     };
   };
   quality: {
-    partialPosts: number;
-    parseWarnings: number;
     networkTruncated: number;
+    navigationTruncated: number;
+    consoleTruncated: number;
+    bodiesTruncated: number;
+    bodiesSkippedSessionCap: number;
     healthGaps: number;
     persistenceErrors: number;
   };
@@ -323,7 +204,7 @@ export interface ExportManifest {
   health: SessionHealth;
 }
 
-export interface TraceSummary {
+export interface SessionSummary {
   sessionId: string;
   extensionVersion?: string;
   startedAt: number;
@@ -331,18 +212,26 @@ export interface TraceSummary {
   durationMs: number;
   counts: {
     network: number;
-    posts: number;
-    comments: number;
-    reactions: number;
+    navigation: number;
+    console: number;
+    requestBodies: number;
+    responseBodies: number;
   };
   health: SessionHealth;
+}
+
+export interface SessionArtifact {
+  schemaVersion: 1;
+  session: CaptureSession | null;
+  navigation: NavigationEntry[];
+  summary: SessionSummary;
 }
 
 export interface SessionData {
   session: CaptureSession | null;
   network: NetworkEntry[];
-  /** Populated at export time by enrichers (not persisted during capture). */
-  enrichments?: SessionEnrichments;
+  navigation: NavigationEntry[];
+  console: ConsoleEntry[];
 }
 
 export interface RedactionRule {

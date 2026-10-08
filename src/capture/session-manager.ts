@@ -1,13 +1,14 @@
 import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
+  appendNavigation,
   readSessionData,
   readSessionMeta,
   setSession,
   withSession,
 } from "../persistence/store.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
-import { resetHydrationIndex } from "./hydration-index.js";
+import { isCaptureableUrl } from "../shared/urls.js";
 import type { CaptureOptions, CaptureSession } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
 
@@ -40,10 +41,11 @@ export async function createSession(
     health: newHealth(),
   };
   await clearSessionData();
-  resetHydrationIndex();
   await withSession(() => ({
     session,
     network: [],
+    navigation: [],
+    console: [],
   }));
   return session;
 }
@@ -84,5 +86,21 @@ export async function updateSessionTabUrl(tabUrl: string): Promise<void> {
   await withSession((data) => {
     if (!data.session?.active || data.session.tabUrl === tabUrl) return data;
     return { ...data, session: { ...data.session, tabUrl } };
+  });
+}
+
+export async function recordNavigation(tabId: number, url: string | undefined, title?: string): Promise<void> {
+  if (!url || !isCaptureableUrl(url)) return;
+  const session = await getActiveSession();
+  if (!session || session.tabId !== tabId) return;
+  await updateSessionTabUrl(url);
+  await appendNavigation({
+    id: crypto.randomUUID(),
+    sessionId: session.id,
+    timestamp: Date.now(),
+    url,
+    title,
+    tabId,
+    frameId: 0,
   });
 }

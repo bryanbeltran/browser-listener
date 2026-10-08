@@ -100,6 +100,23 @@ export function redactSensitiveString(value: string): string {
   return redactString(value);
 }
 
+/** Redact structured JSON or form bodies while preserving safe fields. */
+export function redactBodyText(value: string): string {
+  try {
+    return JSON.stringify(redactDeep(JSON.parse(value)));
+  } catch {
+    const params = new URLSearchParams(value);
+    if (params.size > 0 && value.includes("=")) {
+      const form: Record<string, string> = {};
+      params.forEach((entry, key) => {
+        form[key] = entry;
+      });
+      return new URLSearchParams(redactDeep(form) as Record<string, string>).toString();
+    }
+    return redactSensitiveString(value);
+  }
+}
+
 export function redactValueSummary(value: string | undefined): string | undefined {
   if (value == null) return value;
   return REDACTED;
@@ -133,6 +150,8 @@ export function redactDeep<T>(value: T): T {
         out[k] = typeof v === "string" ? redactHtmlSummary(v) : v;
       } else if (k === "valueSummary") {
         out[k] = redactValueSummary(v as string);
+      } else if (k === "requestBody" || k === "responseBody") {
+        out[k] = typeof v === "string" ? redactBodyText(v) : redactDeep(v);
       } else if (k === "args" && Array.isArray(v)) {
         out[k] = (v as string[]).map((a) => redactSensitiveString(String(a)));
       } else {

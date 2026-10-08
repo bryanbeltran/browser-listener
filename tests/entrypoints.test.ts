@@ -2,17 +2,19 @@ import { describe, expect, it } from "vitest";
 import manifest from "../manifest.json";
 
 describe("browser extension entrypoints", () => {
-  it("manifest references built service worker and popup", () => {
+  it("uses explicit active-tab permissions without broad hosts", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.background.service_worker).toBe("background.js");
     expect(manifest.action.default_popup).toBe("popup.html");
     expect(manifest.content_scripts).toBeUndefined();
-    expect(manifest.permissions).not.toContain("pageCapture");
-    expect(manifest.host_permissions).toEqual([
-      "https://facebook.com/*",
-      "https://*.facebook.com/*",
+    expect(manifest.permissions).toEqual([
+      "storage",
+      "unlimitedStorage",
+      "downloads",
+      "activeTab",
+      "debugger",
     ]);
-    expect(manifest.host_permissions).not.toContain("<all_urls>");
+    expect(manifest.host_permissions).toBeUndefined();
   });
 
   it("export orchestrator module loads", async () => {

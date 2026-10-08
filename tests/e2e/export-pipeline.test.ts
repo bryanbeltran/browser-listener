@@ -5,39 +5,37 @@ import { unzipToMap } from "../helpers/unzip.js";
 
 const REQUIRED_FILES = [
   "report.html",
-  "trace-summary.json",
+  "session.json",
+  "network.json",
+  "console.json",
   "coverage-report.json",
   "export-manifest.json",
-  "graphql-captures.json",
 ];
 
 describe("E2E export pipeline", () => {
-  it("builds ZIP with core Facebook export artifacts", async () => {
-    const zip = await buildZipFromSessionData(sampleExportSessionData());
-    const files = unzipToMap(zip);
-    for (const path of REQUIRED_FILES) {
-      expect(files[path], `missing ${path}`).toBeDefined();
-    }
+  it("builds ZIP with six portable evidence artifacts", async () => {
+    const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
+    expect(Object.keys(files).sort()).toEqual([...REQUIRED_FILES].sort());
   });
 
-  it("offline report focuses on Facebook activity", async () => {
-    const zip = await buildZipFromSessionData(sampleExportSessionData());
-    const files = unzipToMap(zip);
+  it("offline report focuses on generic session evidence", async () => {
+    const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
     expect(files["report.html"]).toContain("Browser Listener");
-    expect(files["report.html"]).toContain("Facebook activity");
+    expect(files["report.html"]).toContain("Evidence timeline");
     expect(files["report.html"]).toContain("Copy citation");
-    expect(files["report.html"]).toContain("activity-search");
-    expect(files["report.html"]).not.toContain("Network explorer");
+    expect(files["report.html"]).toContain("timeline-search");
   });
 
-  it("manifest asserts local-only privacy", async () => {
-    const zip = await buildZipFromSessionData(sampleExportSessionData());
-    const manifest = JSON.parse(unzipToMap(zip)["export-manifest.json"]);
-    const coverage = JSON.parse(unzipToMap(zip)["coverage-report.json"]);
+  it("manifest asserts local-only privacy and generic coverage", async () => {
+    const files = unzipToMap(await buildZipFromSessionData(sampleExportSessionData()));
+    const manifest = JSON.parse(files["export-manifest.json"]);
+    const coverage = JSON.parse(files["coverage-report.json"]);
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
-    expect(manifest.coverage).toEqual({ path: "coverage-report.json", schemaVersion: 1 });
+    expect(manifest.files.map((file: { path: string }) => file.path)).toEqual(REQUIRED_FILES);
     expect(coverage.schemaVersion).toBe(1);
-    expect(coverage.source.tabUrl).toContain("facebook.com");
+    expect(coverage.source.tabUrl).toContain("example.test");
+    expect(JSON.parse(files["session.json"]).navigation).toHaveLength(1);
+    expect(JSON.parse(files["console.json"])).toHaveLength(1);
   });
 });

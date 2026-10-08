@@ -18,7 +18,7 @@ describe("popup state", () => {
     await writeSessionData({
       ...emptySessionData(),
       session,
-      network: [{ id: "n1", sessionId: "popup-session", requestId: "r1", timestamp: 1, url: "https://www.facebook.com/api/graphql/", method: "POST", type: "xhr" }],
+      network: [{ id: "n1", sessionId: "popup-session", requestId: "r1", timestamp: 1, url: "https://example.test/api/items", method: "GET", type: "fetch" }],
     });
 
     const { readPopupState } = await import("../src/popup/popup-state.js");
@@ -39,9 +39,9 @@ describe("popup state", () => {
           sessionId: "popup-session",
           requestId: "r1",
           timestamp: 1,
-          url: "https://www.facebook.com/api/graphql/",
-          method: "POST",
-          type: "xhr",
+          url: "https://example.test/api/items",
+          method: "GET",
+          type: "fetch",
           responseBody: "x".repeat(500_000),
         },
       ],
@@ -71,9 +71,9 @@ describe("popup state", () => {
           sessionId: "test-session-1",
           requestId: "r1",
           timestamp: 1,
-          url: "https://www.facebook.com/api/graphql/",
-          method: "POST",
-          type: "xhr",
+          url: "https://example.test/api/items",
+          method: "GET",
+          type: "fetch",
         },
       ],
     });

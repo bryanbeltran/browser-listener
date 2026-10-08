@@ -33,9 +33,9 @@ describe("store truncation tracking", () => {
         sessionId: session.id,
         requestId: `req-${i}`,
         timestamp: Date.now() + i,
-        url: `https://www.facebook.com/api/graphql/?i=${i}`,
-        method: "POST",
-        type: "xhr",
+        url: `https://example.test/api/items?i=${i}`,
+        method: "GET",
+        type: "fetch",
       });
     }
 

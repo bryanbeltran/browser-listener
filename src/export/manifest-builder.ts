@@ -1,11 +1,21 @@
 import type { ArtifactManifestEntry, ExportManifest, SessionData } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
+import { emptyTruncation } from "../persistence/limits.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
 import { COVERAGE_REPORT_SCHEMA_VERSION } from "./coverage.js";
 
+export const REQUIRED_EXPORT_FILES = [
+  "report.html",
+  "session.json",
+  "network.json",
+  "console.json",
+  "coverage-report.json",
+  "export-manifest.json",
+] as const;
+
 export function buildExportManifest(
   data: SessionData,
-  files: ArtifactManifestEntry[],
+  files: ArtifactManifestEntry[] = baseManifestFiles(),
 ): ExportManifest {
   const extensionVersion = data.session?.extensionVersion ?? getExtensionVersion();
   return {
@@ -24,40 +34,16 @@ export function buildExportManifest(
       serviceWorkerRestarts: 0,
       partialGaps: [],
       persistenceErrors: [],
-      truncation: { network: 0 },
+      truncation: emptyTruncation(),
     },
   };
 }
 
-export function baseManifestFiles(
-  includeGroupActivity = false,
-  includeGraphqlCaptures = false,
-  csvPaths: string[] = [],
-): ArtifactManifestEntry[] {
-  return [
-    { path: "report.html", kind: "report", optional: false, enabled: true },
-    { path: "trace-summary.json", kind: "json", optional: false, enabled: true },
-    { path: "coverage-report.json", kind: "json", optional: false, enabled: true },
-    { path: "export-manifest.json", kind: "json", optional: false, enabled: true },
-    {
-      path: "group-activity.json",
-      kind: "json",
-      optional: true,
-      enabled: includeGroupActivity,
-    },
-    {
-      path: "graphql-captures.json",
-      kind: "json",
-      optional: true,
-      enabled: includeGraphqlCaptures,
-    },
-    ...csvPaths.map(
-      (path): ArtifactManifestEntry => ({
-        path,
-        kind: "json",
-        optional: true,
-        enabled: true,
-      }),
-    ),
-  ];
+export function baseManifestFiles(): ArtifactManifestEntry[] {
+  return REQUIRED_EXPORT_FILES.map((path) => ({
+    path,
+    kind: path === "report.html" ? "report" : "json",
+    optional: false,
+    enabled: true,
+  }));
 }

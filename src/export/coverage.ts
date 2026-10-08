@@ -1,9 +1,4 @@
-import type {
-  CoverageMetric,
-  CoverageReport,
-  FacebookGroupActivity,
-  SessionData,
-} from "../shared/types.js";
+import type { CoverageMetric, CoverageReport, SessionData } from "../shared/types.js";
 
 export const COVERAGE_REPORT_SCHEMA_VERSION = 1 as const;
 
@@ -19,80 +14,55 @@ function hasValue(value: unknown): boolean {
   return typeof value === "string" ? value.trim().length > 0 : value != null;
 }
 
-function buildFieldCoverage(activity: FacebookGroupActivity): CoverageReport["fields"] {
-  const { posts, comments, reactions } = activity;
-  return {
-    posts: {
-      text: metric(posts.length, posts.filter((post) => hasValue(post.text)).length),
-      authorId: metric(posts.length, posts.filter((post) => hasValue(post.authorId)).length),
-      url: metric(posts.length, posts.filter((post) => hasValue(post.url)).length),
-    },
-    comments: {
-      text: metric(comments.length, comments.filter((comment) => hasValue(comment.text)).length),
-      authorId: metric(
-        comments.length,
-        comments.filter((comment) => hasValue(comment.authorId)).length,
-      ),
-      postId: metric(comments.length, comments.filter((comment) => hasValue(comment.postId)).length),
-    },
-    reactions: {
-      userId: metric(reactions.length, reactions.filter((reaction) => hasValue(reaction.userId)).length),
-      targetId: metric(
-        reactions.length,
-        reactions.filter((reaction) =>
-          hasValue(reaction.target === "comment" ? reaction.commentId : reaction.postId),
-        ).length,
-      ),
-      targetText: metric(
-        reactions.length,
-        reactions.filter((reaction) => hasValue(reaction.targetText)).length,
-      ),
-      reactionType: metric(
-        reactions.length,
-        reactions.filter((reaction) => hasValue(reaction.reactionType)).length,
-      ),
-    },
-  };
-}
-
 export function buildCoverageReport(data: SessionData): CoverageReport {
-  const activity = data.enrichments?.facebookGroups;
-  const posts = activity?.posts ?? [];
-  const comments = activity?.comments ?? [];
-  const reactions = activity?.reactions ?? [];
   const health = data.session?.health;
+  const network = data.network;
+  const navigation = data.navigation;
+  const consoleEntries = data.console;
+  const requestBodies = network.filter((entry) => hasValue(entry.requestBody));
+  const responseBodies = network.filter((entry) => hasValue(entry.responseBody));
 
   return {
     schemaVersion: COVERAGE_REPORT_SCHEMA_VERSION,
     generatedAt: Date.now(),
     source: {
       tabUrl: data.session?.tabUrl,
-      sessionPermalink: activity?.sessionPermalink,
       startedAt: data.session?.startedAt,
       stoppedAt: data.session?.stoppedAt,
     },
     totals: {
-      network: data.network.length,
-      groups: activity?.groups.length ?? 0,
-      members: activity?.members.length ?? 0,
-      people: activity?.people.length ?? 0,
-      posts: posts.length,
-      comments: comments.length,
-      reactions: reactions.length,
+      network: network.length,
+      navigation: navigation.length,
+      console: consoleEntries.length,
+      requestBodies: requestBodies.length,
+      responseBodies: responseBodies.length,
     },
-    fields: buildFieldCoverage(activity ?? {
-      groups: [],
-      members: [],
-      people: [],
-      posts: [],
-      comments: [],
-      reactions: [],
-      graphqlQueryHints: [],
-    }),
+    fields: {
+      network: {
+        statusCode: metric(network.length, network.filter((entry) => entry.statusCode != null).length),
+        responseHeaders: metric(
+          network.length,
+          network.filter((entry) => Object.keys(entry.responseHeaders ?? {}).length > 0).length,
+        ),
+        responseBody: metric(network.length, responseBodies.length),
+      },
+      navigation: {
+        title: metric(navigation.length, navigation.filter((entry) => hasValue(entry.title)).length),
+        url: metric(navigation.length, navigation.filter((entry) => hasValue(entry.url)).length),
+      },
+      console: {
+        text: metric(consoleEntries.length, consoleEntries.filter((entry) => hasValue(entry.text)).length),
+        source: metric(consoleEntries.length, consoleEntries.filter((entry) => hasValue(entry.source)).length),
+      },
+    },
     quality: {
-      partialPosts: posts.filter((post) => post.partialParse).length,
-      parseWarnings: activity?.parseWarnings?.length ?? 0,
       networkTruncated: health?.truncation.network ?? 0,
+      navigationTruncated: health?.truncation.navigation ?? 0,
+      consoleTruncated: health?.truncation.console ?? 0,
+      bodiesTruncated: network.filter(
+        (entry) => entry.requestBodyTruncated || entry.responseBodyTruncated,
+      ).length,
+      bodiesSkippedSessionCap: health?.bodiesSkippedSessionCap ?? 0,
       healthGaps: health?.partialGaps.length ?? 0,
       persistenceErrors: health?.persistenceErrors.length ?? 0,
     },

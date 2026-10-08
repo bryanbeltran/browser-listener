@@ -26,6 +26,16 @@ if (!input) {
     const manifest = readJson("export-manifest.json");
     const coverage = readJson("coverage-report.json");
     if (!manifest) throw new Error("export-manifest.json is missing");
+    const required = [
+      "report.html",
+      "session.json",
+      "network.json",
+      "console.json",
+      "coverage-report.json",
+      "export-manifest.json",
+    ];
+    const missing = required.filter((path) => !archive[path]);
+    if (missing.length) throw new Error(`Required artifact(s) missing: ${missing.join(", ")}`);
 
     const summary = {
       archive: resolve(input),
@@ -52,7 +62,7 @@ if (!input) {
           : "";
         console.log(`Captured: ${new Date(summary.source.startedAt).toISOString()}${end}`);
       }
-      console.log("Entities:");
+      console.log("Evidence:");
       for (const [name, count] of Object.entries(summary.totals)) {
         console.log(`  ${name}: ${count}`);
       }

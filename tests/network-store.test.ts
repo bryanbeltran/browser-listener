@@ -27,18 +27,18 @@ describe("network store (IndexedDB)", () => {
       sessionId: SESSION,
       requestId: "req-b",
       timestamp: 20,
-      url: "https://www.facebook.com/api/graphql/",
-      method: "POST",
-      type: "xhr",
+      url: "https://example.test/api/items",
+      method: "GET",
+      type: "fetch",
     });
     await upsertNetworkEntry(SESSION, {
       id: "b",
       sessionId: SESSION,
       requestId: "req-a",
       timestamp: 10,
-      url: "https://www.facebook.com/api/graphql/",
-      method: "POST",
-      type: "xhr",
+      url: "https://example.test/api/items",
+      method: "GET",
+      type: "fetch",
     });
 
     const entries = await listNetworkEntries(SESSION);
@@ -52,9 +52,9 @@ describe("network store (IndexedDB)", () => {
       sessionId: SESSION,
       requestId: "req-1",
       timestamp: 1,
-      url: "https://www.facebook.com/api/graphql/",
-      method: "POST",
-      type: "xhr",
+      url: "https://example.test/api/items",
+      method: "GET",
+      type: "fetch",
       statusCode: 200,
     });
     await upsertNetworkEntry(SESSION, {
@@ -62,9 +62,9 @@ describe("network store (IndexedDB)", () => {
       sessionId: SESSION,
       requestId: "req-1",
       timestamp: 1,
-      url: "https://www.facebook.com/api/graphql/",
-      method: "POST",
-      type: "xhr",
+      url: "https://example.test/api/items",
+      method: "GET",
+      type: "fetch",
       statusCode: 201,
       responseBody: '{"ok":true}',
     });
@@ -82,18 +82,18 @@ describe("network store (IndexedDB)", () => {
         sessionId: SESSION,
         requestId: "r1",
         timestamp: 1,
-        url: "https://www.facebook.com/api/graphql/",
-        method: "POST",
-        type: "xhr",
+        url: "https://example.test/api/items",
+        method: "GET",
+        type: "fetch",
       },
       {
         id: "2",
         sessionId: SESSION,
         requestId: "r2",
         timestamp: 2,
-        url: "https://www.facebook.com/api/graphql/",
-        method: "POST",
-        type: "xhr",
+        url: "https://example.test/api/items",
+        method: "GET",
+        type: "fetch",
       },
     ]);
     expect(result.truncated).toBe(0);
@@ -111,9 +111,9 @@ describe("network store (IndexedDB)", () => {
           sessionId: SESSION,
           requestId: `req-${i}`,
           timestamp: i,
-          url: `https://www.facebook.com/api/graphql/?i=${i}`,
-          method: "POST",
-          type: "xhr",
+          url: `https://example.test/api/items?i=${i}`,
+          method: "GET",
+          type: "fetch",
         });
       }
       const entries = await listNetworkEntries(SESSION);

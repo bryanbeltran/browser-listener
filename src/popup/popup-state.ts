@@ -8,7 +8,11 @@ import type { SessionData } from "../shared/types.js";
 
 export function popupStateFromSessionData(data: SessionData): PopupStateResponse {
   return popupStateFromSnapshot(
-    buildPopupStateSnapshot(data.session, data.network.length),
+    buildPopupStateSnapshot(data.session, {
+      network: data.network.length,
+      navigation: data.navigation.length,
+      console: data.console.length,
+    }),
   );
 }
 

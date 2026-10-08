@@ -1,27 +1,17 @@
-import { detachDebugger } from "../capture/debugger-capture.js";
-import { getActiveSession, stopSession, updateSessionTabUrl } from "../capture/session-manager.js";
 import { recordHealthGap } from "../persistence/store.js";
+import { detachDebugger } from "../capture/debugger-capture.js";
+import { getActiveSession, recordNavigation, stopSession } from "../capture/session-manager.js";
 
-/**
- * When the captured tab closes mid-session: detach debugger, stop capture,
- * keep persisted data so the user can export a partial ZIP from the popup.
- */
+/** Track only explicitly captured tab. No broad navigation permission needed. */
 export function registerTabLifecycle(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     void handleTabClosed(tabId);
   });
 
-  chrome.webNavigation.onCommitted.addListener((details) => {
-    if (details.frameId !== 0) return;
-    void handleTabNavigated(details.tabId, details.url);
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (!changeInfo.url) return;
+    void recordNavigation(tabId, changeInfo.url, tab.title);
   });
-}
-
-async function handleTabNavigated(tabId: number, url: string): Promise<void> {
-  const session = await getActiveSession();
-  if (!session || session.tabId !== tabId) return;
-  if (url.startsWith("chrome://") || url.startsWith("chrome-extension://")) return;
-  await updateSessionTabUrl(url);
 }
 
 export async function handleTabClosed(tabId: number): Promise<void> {

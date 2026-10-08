@@ -1,20 +1,28 @@
-import { applyEnrichers } from "../enrichers/index.js";
-import { redactDeep } from "../redaction/engine.js";
+import { redactDeep, redactSensitiveString } from "../redaction/engine.js";
 import { readSessionData } from "../persistence/store.js";
 import { generateReportHtml } from "../report/generate.js";
 import { buildCoverageReport } from "./coverage.js";
-import { buildExportManifest, baseManifestFiles } from "./manifest-builder.js";
-import { buildTraceSummary } from "./trace-summary.js";
-import { buildFacebookCsvFiles } from "./facebook-csv.js";
-import { buildGraphqlCaptures } from "./graphql-captures.js";
+import { baseManifestFiles, buildExportManifest } from "./manifest-builder.js";
+import { buildSessionSummary } from "./summary.js";
 import { buildZip, zipFileMapFromExport } from "./zip-builder.js";
-import type { SessionData } from "../shared/types.js";
+import type { SessionArtifact, SessionData } from "../shared/types.js";
 
-/** Redact and enrich session data for export (single enrich pass). */
+/** Redact export data again at the boundary. */
 export async function processSessionForExport(data: SessionData): Promise<SessionData> {
-  let processed = redactDeep(data);
-  processed = redactDeep(await applyEnrichers(processed));
-  return processed;
+  const redacted = redactDeep(data);
+  return {
+    ...redacted,
+    navigation: redacted.navigation.map((entry) => ({
+      ...entry,
+      title: entry.title ? redactSensitiveString(entry.title) : undefined,
+    })),
+    console: redacted.console.map((entry) => ({
+      ...entry,
+      text: redactSensitiveString(entry.text),
+      stackTrace: entry.stackTrace ? redactSensitiveString(entry.stackTrace) : undefined,
+      args: entry.args?.map((arg) => redactSensitiveString(arg)),
+    })),
+  };
 }
 
 export async function buildZipFromSessionData(data: SessionData): Promise<Uint8Array> {
@@ -22,36 +30,24 @@ export async function buildZipFromSessionData(data: SessionData): Promise<Uint8A
 }
 
 async function buildZipBundle(data: SessionData): Promise<Uint8Array> {
-  const facebookActivity = data.enrichments?.facebookGroups;
-  const graphqlCaptures = buildGraphqlCaptures(data.network);
-  const csvFiles = facebookActivity ? buildFacebookCsvFiles(facebookActivity) : {};
   const coverageReport = buildCoverageReport(data);
-  const files = baseManifestFiles(
-    Boolean(facebookActivity),
-    graphqlCaptures.length > 0,
-    Object.keys(csvFiles),
-  );
-
+  const summary = buildSessionSummary(data);
+  const sessionArtifact: SessionArtifact = {
+    schemaVersion: 1,
+    session: data.session,
+    navigation: data.navigation,
+    summary,
+  };
+  const files = baseManifestFiles();
   const bundle = {
     reportHtml: generateReportHtml(data, coverageReport),
-    traceSummary: JSON.stringify(buildTraceSummary(data), null, 2),
+    session: JSON.stringify(sessionArtifact, null, 2),
+    network: JSON.stringify(data.network, null, 2),
+    console: JSON.stringify(data.console, null, 2),
     coverageReport: JSON.stringify(coverageReport, null, 2),
     manifest: JSON.stringify(buildExportManifest(data, files), null, 2),
-    graphqlCaptures:
-      graphqlCaptures.length > 0
-        ? JSON.stringify(graphqlCaptures, null, 2)
-        : undefined,
-    groupActivity:
-      facebookActivity != null
-        ? JSON.stringify(facebookActivity, null, 2)
-        : undefined,
   };
-
-  const map = zipFileMapFromExport(bundle);
-  for (const [path, content] of Object.entries(csvFiles)) {
-    map[path] = content;
-  }
-  return buildZip(map);
+  return buildZip(zipFileMapFromExport(bundle));
 }
 
 export async function buildZipExport(): Promise<Uint8Array> {
@@ -62,11 +58,11 @@ export function exportFilename(sessionId?: string | null): string {
   return `browser-listener-${sessionId ?? "session"}-${Date.now()}.zip`;
 }
 
-/** Build ZIP bytes + filename + entity counts for download in popup or background. */
+/** Build ZIP bytes + filename + evidence counts for popup or background. */
 export async function prepareZipExport(): Promise<{
   zip: Uint8Array;
   filename: string;
-  counts: ReturnType<typeof buildTraceSummary>["counts"];
+  counts: ReturnType<typeof buildSessionSummary>["counts"];
 }> {
   const data = await readSessionData();
   const processed = await processSessionForExport(data);
@@ -74,11 +70,12 @@ export async function prepareZipExport(): Promise<{
   return {
     zip,
     filename: exportFilename(data.session?.id),
-    counts: buildTraceSummary(processed).counts,
+    counts: buildSessionSummary(processed).counts,
   };
 }
 
-/** @deprecated Use prepareZipExport + downloadZipFromPage/Worker */
+/** @deprecated Use prepareZipExport + downloadZipFromPage/Worker. */
 export async function buildZipExportBlob(): Promise<{ zip: Uint8Array; filename: string }> {
-  return prepareZipExport();
+  const bundle = await prepareZipExport();
+  return { zip: bundle.zip, filename: bundle.filename };
 }

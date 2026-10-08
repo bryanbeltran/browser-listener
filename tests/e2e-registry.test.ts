@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 /** Registry of E2E coverage categories (manual + automated). */
 export const E2E_COVERAGE_REGISTRY = [
   "start_stop_export_flow",
-  "facebook_groups_enricher",
+  "generic_network_capture",
   "debugger_attach_detach_recovery",
   "service_worker_restart_recovery",
   "zip_export_manifest",

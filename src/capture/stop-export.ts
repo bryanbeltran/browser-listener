@@ -1,20 +1,19 @@
 import {
   detachDebugger,
-  flushPendingApiBodyCaptures,
+  flushPendingBodyCaptures,
   snapshotDebuggerHealthForExport,
 } from "./debugger-capture.js";
-import { runExportReactionHydration } from "./reaction-hydration.js";
-import { getActiveSession, stopSession, updateSessionTabUrl } from "./session-manager.js";
+import { getActiveSession, stopSession } from "./session-manager.js";
 import { readSessionMeta } from "../persistence/store.js";
 import { prepareZipExport } from "../export/orchestrator.js";
 import { downloadZipFromWorker } from "../export/download.js";
-import type { TraceSummary } from "../shared/types.js";
-import { isFacebookUrl } from "../shared/urls.js";
+import type { SessionSummary } from "../shared/types.js";
+import { recordNavigation } from "./session-manager.js";
 
 type ZipExportBundle = {
   zip: Uint8Array;
   filename: string;
-  counts: TraceSummary["counts"];
+  counts: SessionSummary["counts"];
 };
 
 let stopExportPromise: Promise<ZipExportBundle | null> | null = null;
@@ -26,19 +25,17 @@ async function doStopAndPrepareZip(): Promise<ZipExportBundle | null> {
   if (session?.tabId != null && session.active) {
     try {
       const tab = await chrome.tabs.get(session.tabId);
-      if (tab.url) await updateSessionTabUrl(tab.url);
-      await flushPendingApiBodyCaptures();
-      if (isFacebookUrl(tab.url) && session.options.reactionHydration) {
-        await runExportReactionHydration(session.tabId);
-        await flushPendingApiBodyCaptures();
+      if (tab.url) {
+        await recordNavigation(session.tabId, tab.url, tab.title);
       }
+      await flushPendingBodyCaptures();
     } catch {
       /* tab unavailable — partial export */
     }
   }
 
   if (session) {
-    await flushPendingApiBodyCaptures();
+    await flushPendingBodyCaptures();
     await snapshotDebuggerHealthForExport();
     if (session.active) {
       await stopSession();

@@ -3,15 +3,16 @@ import { buildCoverageReport } from "../src/export/coverage.js";
 import type { SessionData } from "../src/shared/types.js";
 import { sampleSession } from "./helpers/fixtures.js";
 
-function dataWithActivity(): SessionData {
+function evidenceData(): SessionData {
   return {
     session: sampleSession({
-      tabUrl: "https://www.facebook.com/groups/example",
+      tabUrl: "https://example.test/problem",
       health: {
         ...sampleSession().health,
-        truncation: { network: 2 },
+        truncation: { network: 2, navigation: 3, console: 4 },
         partialGaps: [{ at: 1, reason: "debugger_detach: canceled" }],
         persistenceErrors: ["quota"],
+        bodiesSkippedSessionCap: 2,
       },
     }),
     network: [
@@ -20,63 +21,67 @@ function dataWithActivity(): SessionData {
         sessionId: "test-session-1",
         requestId: "request-1",
         timestamp: 1,
-        url: "https://www.facebook.com/api/graphql/",
-        method: "POST",
-        type: "xhr",
+        url: "https://example.test/api",
+        method: "GET",
+        type: "fetch",
+        statusCode: 200,
+        responseHeaders: { "content-type": "application/json" },
+        responseBody: "{}",
+      },
+      {
+        id: "network-2",
+        sessionId: "test-session-1",
+        requestId: "request-2",
+        timestamp: 2,
+        url: "https://example.test/asset",
+        method: "GET",
+        type: "image",
       },
     ],
-    enrichments: {
-      facebookGroups: {
-        groups: [{ id: "g1", name: "Example" }],
-        members: [],
-        people: [],
-        posts: [
-          {
-            id: "p1",
-            text: "A captured post",
-            authorId: "u1",
-            source: "feed",
-            partialParse: true,
-          },
-        ],
-        comments: [{ id: "c1", authorName: "Name", postId: "p1", source: "feed" }],
-        reactions: [
-          {
-            userId: "u2",
-            userName: "Reacting User",
-            postId: "p1",
-            target: "post",
-            targetText: "A captured post",
-            source: "dialog",
-          },
-        ],
-        graphqlQueryHints: [],
-        parseWarnings: ["partial response"],
+    navigation: [
+      {
+        id: "nav-1",
+        sessionId: "test-session-1",
+        timestamp: 1,
+        url: "https://example.test/problem",
+        title: "Problem",
       },
-    },
+    ],
+    console: [
+      {
+        id: "console-1",
+        sessionId: "test-session-1",
+        timestamp: 1,
+        level: "error",
+        text: "boom",
+        source: "javascript",
+      },
+    ],
   };
 }
 
 describe("coverage report", () => {
-  it("summarizes provenance, field coverage, and quality signals", () => {
-    const report = buildCoverageReport(dataWithActivity());
+  it("summarizes generic evidence, field coverage, and quality signals", () => {
+    const report = buildCoverageReport(evidenceData());
 
     expect(report.schemaVersion).toBe(1);
-    expect(report.source.tabUrl).toContain("facebook.com");
-    expect(report.totals).toMatchObject({
-      network: 1,
-      groups: 1,
-      posts: 1,
-      comments: 1,
-      reactions: 1,
+    expect(report.source.tabUrl).toContain("example.test");
+    expect(report.totals).toEqual({
+      network: 2,
+      navigation: 1,
+      console: 1,
+      requestBodies: 0,
+      responseBodies: 1,
     });
-    expect(report.fields.posts.text).toMatchObject({ present: 1, total: 1, percent: 100 });
-    expect(report.fields.comments.text).toMatchObject({ present: 0, total: 1, percent: 0 });
-    expect(report.fields.reactions.targetText).toMatchObject({ present: 1, total: 1, percent: 100 });
+    expect(report.fields.network.responseBody).toMatchObject({ present: 1, total: 2, percent: 50 });
+    expect(report.fields.navigation.title).toMatchObject({ present: 1, total: 1, percent: 100 });
+    expect(report.fields.console.text).toMatchObject({ present: 1, total: 1, percent: 100 });
     expect(report.quality).toEqual({
-      partialPosts: 1,
-      parseWarnings: 1,
       networkTruncated: 2,
+      navigationTruncated: 3,
+      consoleTruncated: 4,
+      bodiesTruncated: 0,
+      bodiesSkippedSessionCap: 2,
       healthGaps: 1,
       persistenceErrors: 1,
     });

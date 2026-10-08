@@ -3,21 +3,21 @@ import { baseManifestFiles, buildExportManifest } from "../src/export/manifest-b
 import { leakySessionData } from "./helpers/fixtures.js";
 
 describe("export manifest", () => {
-  it("lists core Facebook export files", () => {
-    const paths = baseManifestFiles(true, true, ["csv/posts.csv"]).map((f) => f.path);
-    expect(paths).toContain("report.html");
-    expect(paths).toContain("trace-summary.json");
-    expect(paths).toContain("coverage-report.json");
-    expect(paths).toContain("group-activity.json");
-    expect(paths).toContain("graphql-captures.json");
-    expect(paths).not.toContain("network.har");
-    expect(paths).not.toContain("timeline.json");
+  it("lists six required evidence files", () => {
+    expect(baseManifestFiles().map((file) => file.path)).toEqual([
+      "report.html",
+      "session.json",
+      "network.json",
+      "console.json",
+      "coverage-report.json",
+      "export-manifest.json",
+    ]);
   });
 
-  it("buildExportManifest records privacy flags and extension version", () => {
+  it("records privacy flags and extension version", () => {
     const data = leakySessionData();
     data.session!.extensionVersion = "0.3.21";
-    const manifest = buildExportManifest(data, baseManifestFiles());
+    const manifest = buildExportManifest(data);
     expect(manifest.privacy.localOnly).toBe(true);
     expect(manifest.privacy.remoteUpload).toBe(false);
     expect(manifest.version).toBe("0.3.21");

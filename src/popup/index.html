@@ -10,7 +10,7 @@
     <header>
       <div class="header-titles">
         <h1>Browser Listener</h1>
-        <p class="tagline">Create a local, searchable Facebook archive</p>
+        <p class="tagline">Create a local, searchable browser session bundle</p>
       </div>
       <span id="app-version" class="version-label" aria-label="Extension version"></span>
     </header>
@@ -21,13 +21,17 @@
 
     <section id="start-panel" class="panel hidden">
       <p class="intro-text">
-        Capture Facebook activity you are authorized to collect and export a searchable archive.
+        Capture a browser problem you are authorized to collect and export a searchable evidence bundle.
         Everything stays on this device — no upload, no telemetry. Sensitive headers, cookies, and
-        tokens are redacted.
+        tokens are redacted. Body capture stays off unless you opt in.
       </p>
       <label class="checkbox">
         <input type="checkbox" id="consent-checkbox" />
         <span>I have permission to capture this page and its visible activity.</span>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="body-capture-checkbox" />
+        <span>Include safe JSON/text bodies (bounded; may contain page content).</span>
       </label>
       <button type="button" id="btn-start" class="primary" disabled>Start capture</button>
       <p id="start-error" class="hint error hidden" role="alert"></p>
@@ -36,7 +40,9 @@
     <section id="active-panel" class="panel hidden">
       <p id="status" class="status active">Capturing…</p>
       <div class="counts">
-        <span>GraphQL requests <strong id="c-network">0</strong></span>
+        <span>Network <strong id="c-network">0</strong></span>
+        <span>Navigation <strong id="c-navigation">0</strong></span>
+        <span>Console <strong id="c-console">0</strong></span>
       </div>
       <p id="health-hint" class="hint"></p>
       <button type="button" id="btn-stop" class="primary">Stop &amp; download ZIP</button>
@@ -46,14 +52,16 @@
     <section id="export-panel" class="panel hidden">
       <p id="export-status" class="status">Capture ended</p>
       <div class="counts">
-        <span>GraphQL requests <strong id="e-network">0</strong></span>
+        <span>Network <strong id="e-network">0</strong></span>
+        <span>Navigation <strong id="e-navigation">0</strong></span>
+        <span>Console <strong id="e-console">0</strong></span>
       </div>
       <p id="export-entities" class="export-entities hidden"></p>
       <p id="export-hint" class="hint"></p>
       <button type="button" id="btn-new-session" class="primary">Start new capture</button>
     </section>
 
-    <p class="hint footer">Open Facebook, start capture, browse, then stop to export a ZIP.</p>
+    <p class="hint footer">Open a web page, start capture, reproduce the problem, then stop to export a ZIP.</p>
     <script type="module" src="./index.ts"></script>
   </body>
 </html>

@@ -1,16 +1,17 @@
-import { redactDeep } from "../redaction/engine.js";
-import {
-  ingestNetworkEntry,
-  rebuildHydrationIndex,
-  resetHydrationIndex,
-} from "../capture/hydration-index.js";
+import { redactDeep, redactSensitiveString } from "../redaction/engine.js";
 import {
   buildPopupStateSnapshot,
   emptyPopupStateSnapshot,
   POPUP_STATE_KEY,
   popupStateFromSnapshot,
 } from "./popup-state.js";
-import { emptyTruncation, estimateNetworkEntryBytes, totalNetworkBytes } from "./limits.js";
+import {
+  AUXILIARY_STORAGE_LIMITS,
+  emptyTruncation,
+  estimateNetworkEntryBytes,
+  totalNetworkBytes,
+  pushWithCap,
+} from "./limits.js";
 import {
   clearNetworkEntries,
   countNetworkEntries,
@@ -21,19 +22,31 @@ import {
 } from "./network-store.js";
 import type {
   CaptureSession,
+  ConsoleEntry,
+  NavigationEntry,
   NetworkEntry,
+  PopupCounts,
   PopupStateSnapshot,
   SessionData,
+  StorageTruncation,
 } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
+const EVIDENCE_KEY = "browserListenerEvidence";
 const POPUP_DEBOUNCE_MS = 1500;
 
 interface PersistedSessionMeta {
   session: CaptureSession | null;
 }
+
+interface PersistedEvidence {
+  navigation: NavigationEntry[];
+  console: ConsoleEntry[];
+}
+
+type PersistedEvidenceMap = Record<string, PersistedEvidence>;
 
 interface SessionCaptureStats {
   count: number;
@@ -41,14 +54,12 @@ interface SessionCaptureStats {
 }
 
 const captureStats = new Map<string, SessionCaptureStats>();
+const evidenceQueues = new Map<string, Promise<void>>();
 let popupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingPopup: { count: number } | null = null;
+let pendingPopup: PopupCounts | null = null;
 
 export function emptySessionData(): SessionData {
-  return {
-    session: null,
-    network: [],
-  };
+  return { session: null, network: [], navigation: [], console: [] };
 }
 
 function isLegacySessionData(value: unknown): value is SessionData {
@@ -66,25 +77,46 @@ function normalizeHealth(session: CaptureSession): CaptureSession["health"] {
     debuggerAttached: h.debuggerAttached ?? false,
     debuggerEverAttached: h.debuggerEverAttached ?? false,
     debuggerDetachCount: h.debuggerDetachCount ?? 0,
+    lastDetachAt: h.lastDetachAt,
+    lastRecoverAt: h.lastRecoverAt,
     serviceWorkerRestarts: h.serviceWorkerRestarts ?? 0,
     partialGaps: h.partialGaps ?? [],
     persistenceErrors: h.persistenceErrors ?? [],
     lastAttachError: h.lastAttachError,
-    truncation: h.truncation ?? emptyTruncation(),
-    apiBodyBytesStored: h.apiBodyBytesStored,
-    apiBodiesSkippedSessionCap: h.apiBodiesSkippedSessionCap,
-    apiBodiesPerResponseTruncated: h.apiBodiesPerResponseTruncated,
+    truncation: { ...emptyTruncation(), ...(h.truncation ?? {}) },
+    bodyBytesStored: h.bodyBytesStored,
+    bodiesSkippedSessionCap: h.bodiesSkippedSessionCap,
+    bodiesPerResponseTruncated: h.bodiesPerResponseTruncated,
   };
 }
 
 function normalizeSession(session: CaptureSession | null): CaptureSession | null {
   if (!session) return null;
-  return { ...session, health: normalizeHealth(session) };
+  return {
+    ...session,
+    options: {
+      captureBodies: session.options?.captureBodies ?? false,
+      captureConsole: session.options?.captureConsole ?? true,
+    },
+    health: normalizeHealth(session),
+  };
 }
 
-function normalizeSessionData(data: SessionData): SessionData {
-  if (!data.session) return data;
-  return { ...data, session: normalizeSession(data.session)! };
+function normalizeEvidence(value: unknown): PersistedEvidence {
+  const evidence = value as Partial<PersistedEvidence> | undefined;
+  return {
+    navigation: Array.isArray(evidence?.navigation) ? evidence.navigation : [],
+    console: Array.isArray(evidence?.console) ? evidence.console : [],
+  };
+}
+
+function normalizeSessionData(data: Partial<SessionData>): SessionData {
+  return {
+    session: normalizeSession(data.session ?? null),
+    network: Array.isArray(data.network) ? data.network : [],
+    navigation: Array.isArray(data.navigation) ? data.navigation : [],
+    console: Array.isArray(data.console) ? data.console : [],
+  };
 }
 
 async function readPersistedMeta(): Promise<PersistedSessionMeta> {
@@ -107,7 +139,7 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
     const migratedBytes = totalNetworkBytes(persisted.network);
     const result = await putNetworkEntries(session.id, persisted.network, migratedBytes);
     if (result.truncated > 0 && session) {
-      session = bumpTruncation(session, result.truncated);
+      session = bumpTruncation(session, { network: result.truncated });
     }
     await writePersistedMeta({ session });
   }
@@ -128,8 +160,48 @@ async function writePersistedMeta(meta: PersistedSessionMeta): Promise<void> {
   });
 }
 
-async function writePopupSnapshot(session: CaptureSession | null, networkCount: number): Promise<void> {
-  const snapshot = buildPopupStateSnapshot(session, networkCount);
+async function readEvidence(sessionId: string): Promise<PersistedEvidence> {
+  const raw = await chrome.storage.local.get(EVIDENCE_KEY);
+  const map = (raw[EVIDENCE_KEY] as PersistedEvidenceMap | undefined) ?? {};
+  return normalizeEvidence(map[sessionId]);
+}
+
+async function writeEvidence(sessionId: string, evidence: PersistedEvidence): Promise<void> {
+  const raw = await chrome.storage.local.get(EVIDENCE_KEY);
+  const map = (raw[EVIDENCE_KEY] as PersistedEvidenceMap | undefined) ?? {};
+  map[sessionId] = {
+    navigation: evidence.navigation.map((entry) => {
+      const safe = redactDeep(entry);
+      return {
+        ...safe,
+        title: safe.title ? redactSensitiveString(safe.title) : undefined,
+      };
+    }),
+    console: evidence.console.map((entry) => {
+      const safe = redactDeep(entry);
+      return {
+        ...safe,
+        text: redactSensitiveString(safe.text),
+        stackTrace: safe.stackTrace ? redactSensitiveString(safe.stackTrace) : undefined,
+        args: safe.args?.map((arg) => redactSensitiveString(arg)),
+      };
+    }),
+  };
+  await chrome.storage.local.set({ [EVIDENCE_KEY]: map });
+}
+
+async function readCounts(session: CaptureSession | null): Promise<PopupCounts> {
+  if (!session?.id) return { network: 0, navigation: 0, console: 0 };
+  const evidence = await readEvidence(session.id);
+  return {
+    network: await countNetworkEntries(session.id),
+    navigation: evidence.navigation.length,
+    console: evidence.console.length,
+  };
+}
+
+async function writePopupSnapshot(session: CaptureSession | null, counts: PopupCounts): Promise<void> {
+  const snapshot = buildPopupStateSnapshot(session, counts);
   await chrome.storage.local.set({ [POPUP_STATE_KEY]: snapshot });
 }
 
@@ -139,10 +211,10 @@ export async function flushPopupSnapshot(): Promise<void> {
     popupDebounceTimer = null;
   }
   if (!pendingPopup) return;
-  const { count } = pendingPopup;
+  const counts = pendingPopup;
   pendingPopup = null;
   const meta = await readPersistedMeta();
-  await writePopupSnapshot(meta.session, count);
+  await writePopupSnapshot(meta.session, counts);
 }
 
 function cancelPopupDebounce(): void {
@@ -153,8 +225,8 @@ function cancelPopupDebounce(): void {
   pendingPopup = null;
 }
 
-function schedulePopupSnapshot(networkCount: number): void {
-  pendingPopup = { count: networkCount };
+function schedulePopupSnapshot(counts: PopupCounts): void {
+  pendingPopup = counts;
   if (popupDebounceTimer) clearTimeout(popupDebounceTimer);
   popupDebounceTimer = setTimeout(() => {
     popupDebounceTimer = null;
@@ -163,23 +235,22 @@ function schedulePopupSnapshot(networkCount: number): void {
     if (!pending) return;
     void (async () => {
       const meta = await readPersistedMeta();
-      await writePopupSnapshot(meta.session, pending.count);
+      await writePopupSnapshot(meta.session, pending);
     })();
   }, POPUP_DEBOUNCE_MS);
 }
 
-/** Write popup state now on session transitions; debounce only count ticks during capture. */
 async function updatePopupSnapshot(
   session: CaptureSession,
-  networkCount: number,
+  counts: PopupCounts,
   opts: { debounce: boolean },
 ): Promise<void> {
   if (opts.debounce) {
-    schedulePopupSnapshot(networkCount);
+    schedulePopupSnapshot(counts);
     return;
   }
   cancelPopupDebounce();
-  await writePopupSnapshot(session, networkCount);
+  await writePopupSnapshot(session, counts);
 }
 
 function resetCaptureStats(sessionId?: string): void {
@@ -226,13 +297,15 @@ function applyEvictedEntries(sessionId: string, evicted: NetworkEntry[]): void {
   captureStats.set(sessionId, stats);
 }
 
-function bumpTruncation(session: CaptureSession, count: number): CaptureSession {
-  const truncation = { ...(session.health.truncation ?? emptyTruncation()) };
-  truncation.network += count;
-  return {
-    ...session,
-    health: { ...session.health, truncation },
-  };
+function bumpTruncation(
+  session: CaptureSession,
+  increments: Partial<StorageTruncation>,
+): CaptureSession {
+  const truncation = { ...emptyTruncation(), ...(session.health.truncation ?? {}) };
+  for (const key of Object.keys(increments) as (keyof StorageTruncation)[]) {
+    truncation[key] += increments[key] ?? 0;
+  }
+  return { ...session, health: { ...session.health, truncation } };
 }
 
 async function loadNetworkForSession(session: CaptureSession | null): Promise<NetworkEntry[]> {
@@ -243,55 +316,83 @@ async function loadNetworkForSession(session: CaptureSession | null): Promise<Ne
 export async function readSessionData(): Promise<SessionData> {
   const meta = await readPersistedMeta();
   const network = await loadNetworkForSession(meta.session);
-  return normalizeSessionData({ session: meta.session, network });
+  const evidence = meta.session?.id ? await readEvidence(meta.session.id) : normalizeEvidence(null);
+  return normalizeSessionData({
+    session: meta.session,
+    network,
+    navigation: evidence.navigation,
+    console: evidence.console,
+  });
 }
 
 export async function writeSessionData(data: SessionData): Promise<SessionData> {
-  const session = normalizeSession(data.session);
+  const normalized = normalizeSessionData(data);
+  const session = normalized.session;
   let truncated = 0;
+  const navigation = normalized.navigation.slice(-AUXILIARY_STORAGE_LIMITS.navigationEntries);
+  const consoleEntries = normalized.console.slice(-AUXILIARY_STORAGE_LIMITS.consoleEntries);
+  const navigationTruncated = normalized.navigation.length - navigation.length;
+  const consoleTruncated = normalized.console.length - consoleEntries.length;
 
-  if (session?.id && data.network.length > 0) {
+  if (session?.id && normalized.network.length > 0) {
     const stats = await loadCaptureStats(session.id);
-    const redactedNetwork = data.network.map((e) => redactDeep(e));
+    const redactedNetwork = normalized.network.map((entry) => redactDeep(entry));
     const result = await putNetworkEntries(session.id, redactedNetwork, stats.bytes);
     truncated = result.truncated;
     applyEvictedEntries(session.id, result.evicted);
-    for (const entry of redactedNetwork) {
-      ingestNetworkEntry(entry, session.tabUrl);
-    }
-    if (result.evicted.length > 0) {
-      await rebuildHydrationIndex(session.id, session.tabUrl);
-    }
   }
 
-  let sessionToStore = session;
-  if (session && truncated > 0) {
-    sessionToStore = bumpTruncation(session, truncated);
+  if (session?.id) {
+    await writeEvidence(session.id, { navigation, console: consoleEntries });
   }
 
+  const sessionToStore =
+    session && (truncated > 0 || navigationTruncated > 0 || consoleTruncated > 0)
+      ? bumpTruncation(session, {
+          network: truncated,
+          navigation: navigationTruncated,
+          console: consoleTruncated,
+        })
+      : session;
   const activeId = sessionToStore?.active ? sessionToStore.id : null;
   await writePersistedMeta({ session: sessionToStore });
   await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
 
-  const networkCount = sessionToStore?.id ? await countNetworkEntries(sessionToStore.id) : 0;
   if (sessionToStore?.id) {
-    const entries = networkCount > 0 ? await listNetworkEntries(sessionToStore.id) : [];
-    captureStats.set(sessionToStore.id, {
-      count: networkCount,
+    const entries = await listNetworkEntries(sessionToStore.id);
+    const stats = {
+      count: entries.length,
       bytes: totalNetworkBytes(entries),
+    };
+    const networkCount = stats.count;
+    captureStats.set(sessionToStore.id, stats);
+    await flushPopupSnapshot();
+    await writePopupSnapshot(sessionToStore, {
+      network: networkCount,
+      navigation: navigation.length,
+      console: consoleEntries.length,
     });
+  } else {
+    await flushPopupSnapshot();
   }
-  await flushPopupSnapshot();
-  if (sessionToStore) await writePopupSnapshot(sessionToStore, networkCount);
 
   const network = sessionToStore?.id ? await listNetworkEntries(sessionToStore.id) : [];
-  return normalizeSessionData({ session: sessionToStore, network });
+  return normalizeSessionData({
+    session: sessionToStore,
+    network,
+    navigation,
+    console: consoleEntries,
+  });
 }
 
 /** Rebuild popup snapshot from full session (e.g. after extension update). */
 export async function syncPopupStateSnapshot(): Promise<void> {
   const data = await readSessionData();
-  await writePopupSnapshot(data.session, data.network.length);
+  await writePopupSnapshot(data.session, {
+    network: data.network.length,
+    navigation: data.navigation.length,
+    console: data.console.length,
+  });
 }
 
 export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
@@ -299,7 +400,7 @@ export async function readPopupStateSnapshot(): Promise<PopupStateSnapshot> {
   return (raw[POPUP_STATE_KEY] as PopupStateSnapshot | undefined) ?? emptyPopupStateSnapshot();
 }
 
-/** Reconcile popup snapshot with session meta + ACTIVE_FLAG (no IndexedDB). */
+/** Reconcile popup snapshot with session meta + active flag without loading network bodies. */
 export async function readPopupStateForUi(): Promise<PopupStateResponse> {
   const snapshot = await readPopupStateSnapshot();
   const raw = await chrome.storage.local.get([STORAGE_KEY, ACTIVE_FLAG]);
@@ -310,28 +411,19 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
     isLegacySessionData(persisted) ? persisted.session : (persisted?.session ?? null),
   );
   if (session) {
-    session = {
-      ...session,
-      active: Boolean(activeId && session.id === activeId),
-    };
+    session = { ...session, active: Boolean(activeId && session.id === activeId) };
   }
 
-  if (!session) {
-    return popupStateFromSnapshot(snapshot);
-  }
+  if (!session) return popupStateFromSnapshot(snapshot);
 
   const snapshotActive = snapshot.session?.active ?? false;
   const snapshotId = snapshot.session?.id;
   if (session.active !== snapshotActive || session.id !== snapshotId) {
-    return popupStateFromSnapshot(
-      buildPopupStateSnapshot(session, snapshot.counts.network),
-    );
+    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts));
   }
 
   if (popupHealthStale(snapshot, session)) {
-    return popupStateFromSnapshot(
-      buildPopupStateSnapshot(session, snapshot.counts.network),
-    );
+    return popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts));
   }
 
   return popupStateFromSnapshot(snapshot);
@@ -342,10 +434,7 @@ export async function getActiveSessionId(): Promise<string | null> {
   return (raw[ACTIVE_FLAG] as string | null) ?? null;
 }
 
-function healthAffectsPopup(
-  prev: CaptureSession | null,
-  next: CaptureSession | null,
-): boolean {
+function healthAffectsPopup(prev: CaptureSession | null, next: CaptureSession | null): boolean {
   if (!prev?.health || !next?.health) return true;
   const p = prev.health;
   const n = next.health;
@@ -389,17 +478,16 @@ export async function patchSession(
   await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
 
   if (next?.active) {
-    const stats = await loadCaptureStats(next.id);
+    const counts = await readCounts(next);
     const debounce = Boolean(
       meta.session?.active &&
         meta.session.id === next.id &&
         !healthAffectsPopup(meta.session, next),
     );
-    await updatePopupSnapshot(next, stats.count, { debounce });
+    await updatePopupSnapshot(next, counts, { debounce });
   } else if (next) {
     cancelPopupDebounce();
-    const stats = await loadCaptureStats(next.id);
-    await writePopupSnapshot(next, stats.count);
+    await writePopupSnapshot(next, await readCounts(next));
   } else {
     cancelPopupDebounce();
   }
@@ -419,23 +507,20 @@ export async function withSession(
     await chrome.storage.local.set({ [ACTIVE_FLAG]: activeId });
   }
 
-  const networkCount = next.session?.id
-    ? (captureStats.get(next.session.id)?.count ?? (await loadCaptureStats(next.session.id)).count)
-    : 0;
+  const counts = next.session ? await readCounts(next.session) : { network: 0, navigation: 0, console: 0 };
   if (next.session?.active) {
     const debounce = Boolean(
       data.session?.active &&
         data.session.id === next.session.id &&
         !healthAffectsPopup(data.session, next.session),
     );
-    await updatePopupSnapshot(next.session, networkCount, { debounce });
+    await updatePopupSnapshot(next.session, counts, { debounce });
   } else if (next.session) {
     cancelPopupDebounce();
-    await writePopupSnapshot(next.session, networkCount);
+    await writePopupSnapshot(next.session, counts);
   }
 
-  const network = await loadNetworkForSession(next.session);
-  return { session: next.session, network };
+  return { ...next, network: await loadNetworkForSession(next.session) };
 }
 
 export async function setSession(session: CaptureSession | null): Promise<void> {
@@ -452,19 +537,96 @@ export async function upsertNetwork(entry: NetworkEntry): Promise<void> {
   const nextStats = applyEntryStats(meta.session.id, redacted, result.previous, result.isNew);
   applyEvictedEntries(meta.session.id, result.evicted);
 
-  if (result.evicted.length > 0) {
-    await rebuildHydrationIndex(meta.session.id, meta.session.tabUrl);
-  } else {
-    ingestNetworkEntry(redacted, meta.session.tabUrl);
-  }
-
   let session = meta.session;
   if (result.truncated > 0) {
-    session = bumpTruncation(session, result.truncated);
+    session = bumpTruncation(session, { network: result.truncated });
     await writePersistedMeta({ session });
   }
 
-  schedulePopupSnapshot(nextStats.count);
+  const evidence = await readEvidence(session.id);
+  schedulePopupSnapshot({
+    network: nextStats.count,
+    navigation: evidence.navigation.length,
+    console: evidence.console.length,
+  });
+}
+
+async function appendBoundedEvidenceNow(
+  kind: "navigation" | "console",
+  entry: NavigationEntry | ConsoleEntry,
+): Promise<void> {
+  const meta = await readPersistedMeta();
+  if (!meta.session?.active || meta.session.id !== entry.sessionId) return;
+
+  const evidence = await readEvidence(entry.sessionId);
+  const truncation = emptyTruncation();
+  const safeEntry = redactDeep(entry) as NavigationEntry | ConsoleEntry;
+  if (kind === "console") {
+    const consoleEntry = safeEntry as ConsoleEntry;
+    consoleEntry.text = redactSensitiveString(consoleEntry.text);
+    consoleEntry.stackTrace = consoleEntry.stackTrace
+      ? redactSensitiveString(consoleEntry.stackTrace)
+      : undefined;
+    consoleEntry.args = consoleEntry.args?.map((arg) => redactSensitiveString(arg));
+  }
+  if (kind === "navigation") {
+    pushWithCap(
+      evidence.navigation,
+      safeEntry as NavigationEntry,
+      AUXILIARY_STORAGE_LIMITS.navigationEntries,
+      truncation,
+      "navigation",
+    );
+  } else {
+    pushWithCap(
+      evidence.console,
+      safeEntry as ConsoleEntry,
+      AUXILIARY_STORAGE_LIMITS.consoleEntries,
+      truncation,
+      "console",
+    );
+  }
+
+  await writeEvidence(entry.sessionId, evidence);
+  const truncated = truncation[kind];
+  if (truncated > 0) {
+    await patchSession((session) =>
+      session ? bumpTruncation(session, { [kind]: truncated }) : session,
+    );
+  } else {
+    const stats = await loadCaptureStats(entry.sessionId);
+    schedulePopupSnapshot({
+      network: stats.count,
+      navigation: evidence.navigation.length,
+      console: evidence.console.length,
+    });
+  }
+}
+
+function appendBoundedEvidence(
+  kind: "navigation" | "console",
+  entry: NavigationEntry | ConsoleEntry,
+): Promise<void> {
+  const previous = evidenceQueues.get(entry.sessionId) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => appendBoundedEvidenceNow(kind, entry));
+  evidenceQueues.set(entry.sessionId, next);
+  void next.then(
+    () => {
+      if (evidenceQueues.get(entry.sessionId) === next) evidenceQueues.delete(entry.sessionId);
+    },
+    () => {
+      if (evidenceQueues.get(entry.sessionId) === next) evidenceQueues.delete(entry.sessionId);
+    },
+  );
+  return next;
+}
+
+export async function appendNavigation(entry: NavigationEntry): Promise<void> {
+  await appendBoundedEvidence("navigation", entry);
+}
+
+export async function appendConsole(entry: ConsoleEntry): Promise<void> {
+  await appendBoundedEvidence("console", entry);
 }
 
 export async function recordHealthGap(reason: string): Promise<void> {
@@ -484,13 +646,13 @@ export async function clearSessionData(): Promise<void> {
   } else {
     resetCaptureStats();
   }
-  resetHydrationIndex();
   await flushPopupSnapshot();
-  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);
+  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, EVIDENCE_KEY, POPUP_STATE_KEY]);
 }
 
 /** Test helper — wipe IndexedDB network store between tests. */
 export async function resetNetworkStoreForTests(): Promise<void> {
   await deleteNetworkDatabase();
   resetCaptureStats();
+  evidenceQueues.clear();
 }

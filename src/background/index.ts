@@ -3,6 +3,7 @@ import {
   activateCaptureSession,
   createSession,
   getActiveSession,
+  recordNavigation,
   stopSession,
 } from "../capture/session-manager.js";
 import {
@@ -13,8 +14,6 @@ import {
   scheduleDebuggerAttachRetry,
   setOnDebuggerCanceledByUser,
 } from "../capture/debugger-capture.js";
-import { registerWebRequestCapture } from "../capture/web-request-capture.js";
-import { registerReactionHydrationListeners, resetReactionHydrationScheduler } from "../capture/reaction-hydration.js";
 import { stopAndExportInBackground, stopCaptureAndPrepareZip } from "../capture/stop-export.js";
 import { uint8ToBase64 } from "../shared/bytes.js";
 import {
@@ -26,25 +25,25 @@ import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
 import { registerTabLifecycle } from "./tab-lifecycle.js";
 import type { CaptureOptions } from "../shared/types.js";
 import { DEFAULT_CAPTURE_OPTIONS } from "../shared/types.js";
-import { isFacebookUrl } from "../shared/urls.js";
+import { isCaptureableUrl } from "../shared/urls.js";
 
 async function startWithConsent(
   tabId: number,
   options: Partial<CaptureOptions> = {},
 ): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
-  if (!isFacebookUrl(tab.url)) {
-    throw new Error("Open a Facebook page before starting capture");
+  if (!isCaptureableUrl(tab.url)) {
+    throw new Error("Open a regular web page before starting capture");
   }
   const merged = { ...DEFAULT_CAPTURE_OPTIONS, ...options };
   await createSession(tabId, tab.url, merged);
-  resetReactionHydrationScheduler();
   try {
     await attachDebugger(tabId);
     if (!isDebuggerAttachedToTab(tabId)) {
       throw new Error("Debugger attach did not complete");
     }
     await activateCaptureSession();
+    await recordNavigation(tabId, tab.url, tab.title);
   } catch (err) {
     await clearSessionData();
     throw err;
@@ -53,9 +52,7 @@ async function startWithConsent(
 
 registerDebuggerCapture();
 setOnDebuggerCanceledByUser(() => void stopAndExportInBackground());
-registerWebRequestCapture();
 registerTabLifecycle();
-registerReactionHydrationListeners();
 
 chrome.runtime.onInstalled.addListener(() => {
   void recoverSession();
@@ -90,12 +87,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     switch (message?.type) {
       case MessageType.GET_STATE: {
         const data = await readSessionData();
-        const hasData =
-          data.network.length > 0 ||
-          Boolean(data.enrichments?.facebookGroups);
+        const hasData = data.network.length > 0 || data.navigation.length > 0 || data.console.length > 0;
         return {
           session: data.session,
-          counts: { network: data.network.length },
+          counts: {
+            network: data.network.length,
+            navigation: data.navigation.length,
+            console: data.console.length,
+          },
           canExport: !data.session?.active && hasData,
         };
       }
@@ -124,7 +123,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return { ok: false, error: "Stop capture first" };
         }
         await clearSessionData();
-        resetReactionHydrationScheduler();
         return { ok: true };
       default:
         return { ok: false };

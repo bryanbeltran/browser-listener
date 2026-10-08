@@ -9,13 +9,25 @@ export const NETWORK_STORE_LIMITS = {
 export const NETWORK_BYTE_BUDGET = NETWORK_STORE_LIMITS.byteBudget;
 export const NETWORK_ENTRY_SOFT_CAP = NETWORK_STORE_LIMITS.entrySoftCap;
 
+/** Small, bounded evidence streams kept in chrome.storage.local. */
+export const AUXILIARY_STORAGE_LIMITS = {
+  navigationEntries: 2_000,
+  consoleEntries: 5_000,
+} as const;
+
+/** Body capture is opt-in and bounded independently from metadata storage. */
+export const BODY_CAPTURE_LIMITS = {
+  perResponseBytes: 256 * 1024,
+  sessionBytes: 4 * 1024 * 1024,
+} as const;
+
 /** @deprecated Use NETWORK_ENTRY_SOFT_CAP — kept for tests that mock limits. */
 export const STORAGE_LIMITS = {
   network: NETWORK_ENTRY_SOFT_CAP,
 } as const;
 
 export function emptyTruncation(): StorageTruncation {
-  return { network: 0 };
+  return { network: 0, navigation: 0, console: 0 };
 }
 
 export function estimateNetworkEntryBytes(entry: NetworkEntry): number {
@@ -33,7 +45,7 @@ export function totalNetworkBytes(entries: readonly NetworkEntry[]): number {
 }
 
 export function hasTruncation(t: StorageTruncation): boolean {
-  return t.network > 0;
+  return t.network > 0 || t.navigation > 0 || t.console > 0;
 }
 
 /** Ring-buffer helper (used in unit tests; production uses IndexedDB eviction). */

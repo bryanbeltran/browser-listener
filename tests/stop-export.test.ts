@@ -17,7 +17,7 @@ vi.mock("../src/capture/session-manager.js", async (importOriginal) => {
 
 vi.mock("../src/capture/debugger-capture.js", () => ({
   detachDebugger: vi.fn(async () => {}),
-  flushPendingApiBodyCaptures: vi.fn(async () => {}),
+  flushPendingBodyCaptures: vi.fn(async () => {}),
   snapshotDebuggerHealthForExport: vi.fn(async () => {}),
 }));
 
@@ -25,7 +25,7 @@ vi.mock("../src/export/orchestrator.js", () => ({
   prepareZipExport: vi.fn(async () => ({
     zip: new Uint8Array([1, 2, 3]),
     filename: "test.zip",
-    counts: { network: 1, posts: 2, comments: 3, reactions: 4 },
+    counts: { network: 1, navigation: 2, console: 3, requestBodies: 0, responseBodies: 0 },
   })),
 }));
 

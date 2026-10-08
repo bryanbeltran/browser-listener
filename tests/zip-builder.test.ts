@@ -3,27 +3,24 @@ import { buildZip, zipFileMapFromExport } from "../src/export/zip-builder.js";
 import { unzipToMap } from "./helpers/unzip.js";
 
 describe("zip builder", () => {
-  it("includes core export files", () => {
+  it("includes six required export files", () => {
     const zip = buildZip(
       zipFileMapFromExport({
         reportHtml: "<html></html>",
-        traceSummary: "{}",
+        session: "{}",
+        network: "[]",
+        console: "[]",
         coverageReport: "{}",
         manifest: "{}",
-        graphqlCaptures: "[]",
-        groupActivity: "{}",
       }),
     );
-    const files = unzipToMap(zip);
-    expect(Object.keys(files).sort()).toEqual(
-      [
-        "export-manifest.json",
-        "coverage-report.json",
-        "graphql-captures.json",
-        "group-activity.json",
-        "report.html",
-        "trace-summary.json",
-      ].sort(),
-    );
+    expect(Object.keys(unzipToMap(zip)).sort()).toEqual([
+      "console.json",
+      "coverage-report.json",
+      "export-manifest.json",
+      "network.json",
+      "report.html",
+      "session.json",
+    ]);
   });
 });

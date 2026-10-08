@@ -28,9 +28,9 @@ describe("tab lifecycle", () => {
           sessionId: session.id,
           requestId: "r1",
           timestamp: Date.now(),
-          url: "https://www.facebook.com/api/graphql/",
-          method: "POST",
-          type: "xhr",
+          url: "https://example.test/api/items",
+          method: "GET",
+          type: "fetch",
         },
       ],
     });

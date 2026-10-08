@@ -1,129 +1,90 @@
 # Architecture
 
-Browser Listener is a Manifest V3 Chrome extension for **creating portable, searchable Facebook session archives** — posts, comments, reactions, people, provenance, and capture health — with no upload or telemetry.
+Browser Listener is a Manifest V3 Chrome extension for local-first browser session recording. Its output is a portable, redacted bug-reproduction/evidence bundle.
 
 ## Data flow
 
 ```mermaid
 flowchart LR
-  subgraph ui [UI]
-    Popup[Popup]
-  end
-  subgraph sw [Service worker]
-    BG[Background hub]
-    CDP[Debugger CDP]
-    WR[webRequest fallback]
-    Meta[(storage.local — session meta)]
-    IDB[(IndexedDB — network entries)]
-    Export[ZIP export]
-  end
-
-  Popup -->|CONSENT_AND_START| BG
-  BG --> CDP
-  BG --> WR
-  BG --> Meta
-  BG --> IDB
-  BG -->|redact on write| Meta
-  BG -->|redact on write| IDB
-  Popup -->|STOP_AND_EXPORT| BG
-  BG --> Export
-  Export -->|parse GraphQL + redact| Download[downloads API]
+  Popup[Popup] -->|explicit start| BG[Service worker]
+  BG --> CDP[chrome.debugger / CDP]
+  BG --> Meta[(storage.local session meta)]
+  BG --> Aux[(storage.local bounded navigation + console)]
+  BG --> IDB[(IndexedDB bounded network)]
+  Popup -->|stop + export| BG
+  BG --> Export[Six-file ZIP]
+  Export --> Download[Local download]
 ```
 
 ## Module boundaries
 
 | Module | Responsibility |
 |--------|----------------|
-| `capture/` | Session lifecycle, CDP debugger, GraphQL body capture, webRequest metadata |
-| `redaction/` | Default-deny sensitive keys; applied on persist + export |
-| `persistence/` | `chrome.storage.local` (session meta), IndexedDB (network entries), caps, SW recovery |
-| `export/` | ZIP orchestration, CSV, coverage, graphql-captures archive |
-| `report/` | Searchable, citation-friendly offline archive HTML |
-| `enrichers/` | Facebook GraphQL parser (always applied at export) |
+| `capture/` | Session lifecycle, debugger attach/recovery, safe body policy, stop/export |
+| `background/` | MV3 service-worker entrypoint and captured-tab lifecycle |
+| `persistence/` | Session metadata, bounded auxiliary evidence, IndexedDB network store, caps |
+| `redaction/` | Default-deny headers, cookies, URL parameters, body values, and custom rules |
+| `export/` | Coverage, manifest, session summary, six-file ZIP orchestration |
+| `report/` | Searchable offline timeline and health report |
+| `popup/` | Consent gate, session controls, health hints, download handoff |
 
 ## Capture strategy
 
-1. **Debugger (CDP)** — `Network.*` on the captured tab for GraphQL request/response bodies. Shows Chrome’s debugging banner.
-2. **webRequest** — metadata fallback when debugger is not attached. Skipped when CDP is active to avoid duplicate rows.
+1. Popup sends `CONSENT_AND_START` only after the user checks authorization.
+2. Background validates current tab is ordinary HTTP(S), creates metadata, and attaches CDP.
+3. CDP `Network.*` records network lifecycle. `Runtime.*` and `Log.entryAdded` record console evidence.
+4. `tabs.onUpdated` records top-frame URL changes for the explicitly captured tab.
+5. CDP detach and MV3 restart paths retry while the session remains active.
 
-## Privacy / redaction
+There is no broad host monitoring or request interception fallback. CDP is authoritative while the user-visible debugger session is active.
 
-- Redaction runs on **write** (`persistence/store`) and again on **export** (`export/orchestrator`).
-- ZIP export never uploads; `export-manifest.json` records `privacy.localOnly: true`.
-- Capture is restricted to HTTPS Facebook hosts and requires an explicit start action.
-- Users should capture only pages and data they are authorized to collect.
+## Storage and limits
 
-## MV3 reliability
+- Session metadata uses `chrome.storage.local`.
+- Navigation and console entries use per-session bounded local-storage arrays.
+- Network entries use IndexedDB with a 128 MiB byte budget and 100,000-entry soft cap.
+- Body capture is opt-in. Only JSON/text-like MIME types are eligible.
+- Each body is capped at 256 KiB. Total body storage is capped at 4 MiB per session.
+- Every eviction or auxiliary overflow increments `session.health.truncation`.
+
+Redaction runs before persistence and again at export. Body text is parsed as JSON or form data when possible, then bounded. Headers and sensitive URL parameters are always redacted.
+
+## Export contract
+
+The ZIP contains exactly:
+
+```text
+report.html
+session.json
+network.json
+console.json
+coverage-report.json
+export-manifest.json
+```
+
+`session.json` stores normalized session metadata, navigation evidence, and generic counts. `network.json` and `console.json` keep evidence streams separate for tooling. `coverage-report.json` reports totals, field presence, truncation, body skips, persistence errors, and debugger gaps. `export-manifest.json` records local-only privacy and enabled capture options.
+
+## Reliability
 
 | Event | Behavior |
 |-------|----------|
-| Service worker restart | `chrome.storage.session` detects reboot; debugger reattach attempted |
-| Debugger detach | Health gap logged; retry attach while session active |
-| Tab closed mid-capture | Detach debugger, stop session, **keep** persisted data; popup offers partial export |
-| Storage pressure | IndexedDB byte budget + entry soft cap; oldest entries evicted; `health.truncation.network` count |
+| MV3 service-worker restart | Detect active session and attempt CDP reattach |
+| Debugger detach | Record gap, update health, retry while active |
+| Tab close | Record gap, stop session, detach debugger, preserve export data |
+| Storage pressure | Evict oldest network entries and surface counts in coverage |
 
 ## Permissions
 
 | Permission | Rationale |
 |------------|-----------|
-| `storage` | Session metadata persistence |
-| `unlimitedStorage` | Large GraphQL body retention in IndexedDB |
-| `downloads` | Local ZIP only |
-| `tabs` | Target active tab |
-| `debugger` | CDP GraphQL capture |
-| `webRequest` | Network metadata fallback |
-| `webNavigation` | Track tab URL during capture |
-| `https://facebook.com/*`, `https://*.facebook.com/*` | Capture authorized Facebook tabs only |
+| `storage` | Session metadata and bounded low-volume evidence |
+| `unlimitedStorage` | Network IndexedDB budget |
+| `downloads` | Local ZIP download |
+| `activeTab` | Explicit current-tab authorization |
+| `debugger` | CDP event capture and debugger recovery |
 
-## Export bundle
+No host, request-interception, or broad navigation permission is required.
 
-Core files: `report.html`, `trace-summary.json`, `coverage-report.json`, `group-activity.json`, `graphql-captures.json`, `csv/*.csv`, `export-manifest.json`.
+## Extension boundary
 
-## Facebook data model
-
-GraphQL bodies from `facebook.com/api/graphql` are parsed at export time by `src/enrichers/facebook-groups.ts`.
-
-```
-Post
-├── surface (group | timeline | page)
-├── groupId / groupName (when in a group)
-├── text, author, media, share info
-├── linkedReactions[]  → user, reactionType
-└── linkedComments[]   → text, author
-    └── linkedReactions[]  (capture-dependent — see roadmap)
-
-FacebookReaction
-├── target: post | comment
-├── postId, commentId?, userId, reactionType?
-└── source query (e.g. CometUFIReactionsDialog)
-```
-
-## Coverage and provenance
-
-`coverage-report.json` is generated at export time from the redacted session data. It records the
-source URL and capture interval, entity totals, field-level presence metrics, parser warnings, and
-storage/lifecycle quality signals. The offline report renders the same information and provides a
-copyable citation containing the source, capture interval, and session id.
-
-Exports are observational archives, not guaranteed complete copies of a page. Current completeness gaps include:
-
-| Gap | Cause | Planned fix |
-|-----|-------|-------------|
-| Tooltip-only post reactors | User hovered Like count; full dialog not opened | Export hydration uses `CometUFIReactionsDialogTabContentRefetchQuery` with `ALL_REACTION_TYPE_IDS` + pagination |
-| Missing comment reactors | Comment `feedbackId` not in capture; comment not hydration target | `selectNextCommentForHydration` + export pass budgets for comments |
-| `reactionType` missing | Tooltip rows lack per-user type | `backfillReactionTypes` peers dialog rows onto tooltip rows |
-| `targetText` missing on reactions | Post/comment not captured or `partialParse` | Prioritize hydration for reactions lacking `targetText`; improve partial JSON text extraction |
-| Truncated network buffer | Byte budget or entry soft cap exceeded | Evict oldest entries; surface in `coverage-report.json` |
-
-Hydration already runs in two phases: slow session sampling (`SAMPLE_REACTION_TYPE_IDS`) and a final `runExportReactionHydration` pass before ZIP. Remaining work is coverage-driven target selection (hydrate under-covered content first), budget tuning tied to coverage metrics, and paginating until `captured >= reactionCount` per target.
-
-The extension remains ZIP-export only. `npm run inspect -- export.zip` reads the archive locally and
-prints its manifest, provenance, entity totals, quality warnings, and file list. Sensitive-trait or
-political inference is explicitly outside the core extension; any future analysis must be a separate,
-opt-in local tool with its own privacy review.
-
-## Extensibility
-
-Register enrichers in `src/enrichers/index.ts`. All registered enrichers run at export time. New site
-adapters should be added only after their permissions, capture scope, redaction behavior, and export
-privacy boundary are documented.
+Capture remains local. There is no upload endpoint, account integration, site parser, classifier, political inference, or sensitive-trait analysis in the core extension. Future tooling can consume the generic bundle as a separate, opt-in project.
