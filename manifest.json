@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Browser Listener",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "description": "Capture an authorized browser session locally and export a redacted, portable evidence bundle. No upload or telemetry.",
   "permissions": [
     "storage",

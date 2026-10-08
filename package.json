@@ -1,6 +1,6 @@
 {
   "name": "browser-listener",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:sdk": "tsc -p sdk/tsconfig.json --noEmit",
     "lint": "eslint .",
+    "pretest": "npm run build:sdk",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run lint && npm run typecheck && npm run typecheck:sdk && npm run build:sdk && npm run test && npm run build",
