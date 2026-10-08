@@ -36,6 +36,9 @@
           <p class="hint">Loading tabs…</p>
         </div>
       </fieldset>
+      <label for="session-name" class="field-label">Session name (optional)</label>
+      <input id="session-name" class="text-input" type="text" maxlength="120" placeholder="Checkout failure" />
+      <p class="hint">Stored as local metadata only; it does not change capture scope.</p>
       <label for="capture-profile" class="field-label">Capture profile</label>
       <select id="capture-profile" class="text-input">
         <option value="metadata">Metadata only — no console or bodies</option>
@@ -107,6 +110,24 @@
       <p id="export-entities" class="export-entities hidden"></p>
       <p id="export-hint" class="hint"></p>
       <button type="button" id="btn-new-session" class="primary">Start new capture</button>
+    </section>
+
+    <section id="history-panel" class="panel">
+      <h2>Local session history</h2>
+      <p id="history-summary" class="hint">Completed captures remain on this device under the retention policy.</p>
+      <div id="history-list" class="history-list" aria-live="polite"></div>
+      <button type="button" id="btn-clear-history" class="secondary">Delete all local history</button>
+      <details class="retention-config">
+        <summary>Retention controls</summary>
+        <label for="retention-days" class="field-label">Keep completed sessions (days)</label>
+        <input id="retention-days" class="text-input" type="number" min="1" step="1" />
+        <label for="retention-count" class="field-label">Maximum completed sessions</label>
+        <input id="retention-count" class="text-input" type="number" min="1" step="1" />
+        <label for="retention-megabytes" class="field-label">Maximum local evidence (MiB)</label>
+        <input id="retention-megabytes" class="text-input" type="number" min="1" step="1" />
+        <button type="button" id="btn-save-retention" class="secondary">Save retention policy</button>
+        <p id="retention-status" class="hint" aria-live="polite"></p>
+      </details>
     </section>
 
     <p class="hint footer">Open a web page, start capture, reproduce the problem, then stop to export a ZIP.</p>

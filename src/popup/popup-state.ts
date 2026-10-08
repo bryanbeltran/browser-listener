@@ -1,4 +1,5 @@
 import { readPopupStateForUi } from "../persistence/store.js";
+import { DEFAULT_RETENTION_POLICY } from "../persistence/preferences.js";
 import {
   buildPopupStateSnapshot,
   popupStateFromSnapshot,
@@ -17,6 +18,9 @@ export function popupStateFromSessionData(data: SessionData): PopupStateResponse
       }),
     ),
     redactionEnabled: data.session?.options?.redactionEnabled !== false,
+    history: [],
+    retentionPolicy: DEFAULT_RETENTION_POLICY,
+    deletionReceipts: [],
   };
 }
 

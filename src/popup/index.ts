@@ -16,6 +16,9 @@ const EMPTY_STATE: PopupStateResponse = {
   counts: { network: 0, navigation: 0, console: 0, markers: 0 },
   canExport: false,
   redactionEnabled: true,
+  history: [],
+  retentionPolicy: { schemaVersion: 1, maxAgeMs: 30 * 24 * 60 * 60 * 1000, maxSessions: 10, maxBytes: 512 * 1024 * 1024 },
+  deletionReceipts: [],
 };
 
 function el<T extends HTMLElement>(id: string): T | null {
@@ -31,6 +34,7 @@ const consentCheckbox = el<HTMLInputElement>("consent-checkbox");
 const targetTabsField = el<HTMLFieldSetElement>("target-tabs");
 const targetTabsList = el("target-tabs-list");
 const captureProfileSelect = el<HTMLSelectElement>("capture-profile");
+const sessionNameInput = el<HTMLInputElement>("session-name");
 const scopeOriginsInput = el<HTMLInputElement>("scope-origins");
 const redactionCheckbox = el<HTMLInputElement>("redaction-checkbox");
 const redactionWarning = el("redaction-warning");
@@ -63,6 +67,14 @@ const markerNote = el<HTMLInputElement>("marker-note");
 const btnMarker = el<HTMLButtonElement>("btn-marker");
 const btnPause = el<HTMLButtonElement>("btn-pause");
 const markerStatus = el("marker-status");
+const historySummary = el("history-summary");
+const historyList = el("history-list");
+const btnClearHistory = el<HTMLButtonElement>("btn-clear-history");
+const retentionDays = el<HTMLInputElement>("retention-days");
+const retentionCount = el<HTMLInputElement>("retention-count");
+const retentionMegabytes = el<HTMLInputElement>("retention-megabytes");
+const btnSaveRetention = el<HTMLButtonElement>("btn-save-retention");
+const retentionStatus = el("retention-status");
 
 function truncationHint(session: PopupStateResponse["session"]): string {
   const t = session?.health?.truncation;
@@ -94,6 +106,66 @@ function debuggerHealthHint(session: PopupStateResponse["session"]): string {
 
 function formatEntityCounts(counts: ExportEntityCounts): string {
   return `${counts.network} network · ${counts.navigation} navigation · ${counts.console} console · ${counts.markers ?? 0} markers`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${Math.round(bytes / (1024 * 1024))} MiB`;
+}
+
+function renderHistory(state: PopupStateResponse): void {
+  if (!historyList) return;
+  const history = state.history ?? [];
+  if (retentionDays && document.activeElement !== retentionDays) {
+    retentionDays.value = String(Math.max(1, Math.round(state.retentionPolicy.maxAgeMs / (24 * 60 * 60 * 1000))));
+  }
+  if (retentionCount && document.activeElement !== retentionCount) retentionCount.value = String(state.retentionPolicy.maxSessions);
+  if (retentionMegabytes && document.activeElement !== retentionMegabytes) {
+    retentionMegabytes.value = String(Math.max(1, Math.round(state.retentionPolicy.maxBytes / (1024 * 1024))));
+  }
+  setText(historySummary, history.length
+    ? `${history.length} completed session(s) · retention up to ${state.retentionPolicy.maxSessions} · ${formatBytes(state.retentionPolicy.maxBytes)}`
+    : "No completed sessions retained locally.");
+  historyList.replaceChildren();
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "History is empty.";
+    historyList.append(empty);
+  }
+  for (const entry of history) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    const title = document.createElement("strong");
+    title.textContent = entry.name || `Session ${entry.id.slice(0, 8)}…`;
+    const meta = document.createElement("span");
+    meta.className = "history-meta";
+    meta.textContent = `${new Date(entry.startedAt).toLocaleString()} · ${entry.counts.network} network · ${entry.counts.console} console · ${formatBytes(entry.bytes)}${entry.partial ? " · partial" : ""}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "Delete session";
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      setText(retentionStatus, "Deleting session…");
+      try {
+        const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+          { type: MessageType.DELETE_SESSION, sessionId: entry.id },
+          30_000,
+        );
+        if (!response?.ok) throw new Error(response?.error ?? "Deletion is incomplete; retry from history");
+        setText(retentionStatus, "Session deleted");
+        await refresh();
+      } catch (err) {
+        setText(retentionStatus, err instanceof Error ? err.message : "Could not delete session");
+        remove.disabled = false;
+      }
+    });
+    item.append(title, meta, remove);
+    historyList.append(item);
+  }
+  if (btnClearHistory) btnClearHistory.disabled = history.length === 0;
 }
 
 function showExportEntities(counts?: ExportEntityCounts): void {
@@ -218,6 +290,8 @@ function render(state: Awaited<ReturnType<typeof readPopupState>>, loaded = true
   const paused = active && state.session?.paused === true;
   const canExport = state.canExport;
 
+  renderHistory(state);
+
   loadingPanel?.classList.toggle("hidden", loaded);
   startPanel?.classList.toggle("hidden", !loaded || active || canExport);
   activePanel?.classList.toggle("hidden", !loaded || !active);
@@ -302,6 +376,7 @@ btnStart?.addEventListener("click", async () => {
         tabId: tab.id,
         options: {
           profile: (captureProfileSelect?.value || "network-console") as CaptureProfile,
+          sessionName: sessionNameInput?.value.trim() || undefined,
           allowedOrigins: parseOriginList(scopeOriginsInput?.value),
           targetTabIds: [...new Set([tab.id, ...selectedTargetTabIds()])],
         },
@@ -396,8 +471,58 @@ btnMarker?.addEventListener("click", async () => {
 
 btnNewSession?.addEventListener("click", async () => {
   lastExportCounts = undefined;
-  await sendMessageWithTimeout({ type: MessageType.DISCARD_CAPTURE }, 30_000);
+  await sendMessageWithTimeout({ type: MessageType.PREPARE_NEW_CAPTURE }, 30_000);
   await refresh();
+});
+
+btnClearHistory?.addEventListener("click", async () => {
+  if (btnClearHistory.disabled) return;
+  btnClearHistory.disabled = true;
+  setText(retentionStatus, "Deleting local history…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      { type: MessageType.CLEAR_HISTORY },
+      60_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Deletion is incomplete; retry from history");
+    setText(retentionStatus, "Local history deleted");
+    await refresh();
+  } catch (err) {
+    setText(retentionStatus, err instanceof Error ? err.message : "Could not delete local history");
+    btnClearHistory.disabled = false;
+  }
+});
+
+btnSaveRetention?.addEventListener("click", async () => {
+  const days = Number(retentionDays?.value);
+  const count = Number(retentionCount?.value);
+  const megabytes = Number(retentionMegabytes?.value);
+  if (!Number.isFinite(days) || days < 1 || !Number.isFinite(count) || count < 1 || !Number.isFinite(megabytes) || megabytes < 1) {
+    setText(retentionStatus, "Retention values must be positive numbers");
+    return;
+  }
+  btnSaveRetention.disabled = true;
+  setText(retentionStatus, "Saving retention policy…");
+  try {
+    const response = await sendMessageWithTimeout<{ ok?: boolean; error?: string }>(
+      {
+        type: MessageType.SET_RETENTION,
+        policy: {
+          maxAgeMs: Math.floor(days * 24 * 60 * 60 * 1000),
+          maxSessions: Math.floor(count),
+          maxBytes: Math.floor(megabytes * 1024 * 1024),
+        },
+      },
+      30_000,
+    );
+    if (!response?.ok) throw new Error(response?.error ?? "Could not save retention policy");
+    setText(retentionStatus, "Retention policy saved");
+    await refresh();
+  } catch (err) {
+    setText(retentionStatus, err instanceof Error ? err.message : "Could not save retention policy");
+  } finally {
+    btnSaveRetention.disabled = false;
+  }
 });
 
 btnPreviewRedaction?.addEventListener("click", async () => {
@@ -504,6 +629,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
     changes.browserListenerPopupState ||
     changes.browserListenerSessionData ||
     changes.browserListenerActiveSessionId ||
+    changes.browserListenerSessionHistory ||
+    changes.browserListenerRetentionPolicy ||
+    changes.browserListenerDeletionReceipts ||
     changes[REDACTION_PREFERENCE_KEY]
     || changes[REDACTION_CONFIG_KEY]
   ) {

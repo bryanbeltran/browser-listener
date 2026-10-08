@@ -2,12 +2,14 @@ import { emptyTruncation } from "../persistence/limits.js";
 import {
   clearSessionData,
   appendNavigation,
+  archiveCurrentSession,
   readSessionData,
   readSessionMeta,
   setSession,
   withSession,
 } from "../persistence/store.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
+import { buildCapabilityMatrix } from "./capabilities.js";
 import { isCaptureableUrl, isOriginAllowed, normalizeOriginAllowlist } from "../shared/urls.js";
 import { loadRedactionConfig, readRedactionPreference } from "../persistence/preferences.js";
 import {
@@ -43,6 +45,7 @@ export async function createSession(
   const redactionEnabled = await readRedactionPreference();
   const profile = normalizeCaptureProfile(inferCaptureProfile(options));
   const startedAt = Date.now();
+  const sessionName = typeof options.sessionName === "string" ? options.sessionName.trim().slice(0, 120) : "";
   const targetMap = new Map<number, CaptureTarget>();
   for (const target of targetTabs ?? []) {
     targetMap.set(target.tabId, { ...target, partialGaps: target.partialGaps ?? [] });
@@ -63,6 +66,7 @@ export async function createSession(
     targetTabIds: targets.map((target) => target.tabId),
     redactionEnabled,
     budgets: normalizeCaptureBudgets(options.budgets),
+    ...(sessionName ? { sessionName } : {}),
   };
   const session: CaptureSession = {
     id: crypto.randomUUID(),
@@ -71,15 +75,17 @@ export async function createSession(
     startedAt,
     tabId,
     tabUrl,
+    ...(sessionName ? { name: sessionName } : {}),
     extensionVersion: getExtensionVersion(),
     options: normalizedOptions,
     paused: false,
     pauseIntervals: [],
     targets,
     policyEpochs: [policyEpochFromOptions(normalizedOptions, `epoch-${crypto.randomUUID()}`, startedAt)],
+    capabilities: buildCapabilityMatrix(),
     health: newHealth(),
   };
-  await clearSessionData();
+  await clearSessionData({ archive: true, preserveHistory: true });
   await withSession(() => ({
     session,
     network: [],
@@ -130,6 +136,7 @@ export async function stopSession(opts?: { tabClosed?: boolean }): Promise<Captu
     ),
   };
   await setSession(stopped);
+  await archiveCurrentSession();
   return stopped;
 }
 

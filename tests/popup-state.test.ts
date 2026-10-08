@@ -54,13 +54,17 @@ describe("popup state", () => {
     const { readPopupState } = await import("../src/popup/popup-state.js");
     await readPopupState();
 
-    expect(getSpy).toHaveBeenCalledTimes(2);
     expect(getSpy.mock.calls[0]?.[0]).toBe("browserListenerPopupState");
     expect(getSpy.mock.calls[1]?.[0]).toEqual([
       "browserListenerSessionData",
       "browserListenerActiveSessionId",
       "browserListenerRedactionEnabled",
       "browserListenerRedactionConfig",
+    ]);
+    expect(getSpy.mock.calls.slice(2).map(([key]) => key)).toEqual([
+      "browserListenerSessionHistory",
+      "browserListenerRetentionPolicy",
+      "browserListenerDeletionReceipts",
     ]);
   });
 

@@ -22,7 +22,12 @@ import { uint8ToBase64 } from "../shared/bytes.js";
 import {
   clearSessionData,
   appendMarker,
+  clearSessionHistory,
+  deleteSession,
+  readDeletionReceiptsSnapshot,
+  readSessionHistory,
   readSessionData,
+  updateRetentionPolicy,
 } from "../persistence/store.js";
 import {
   readRedactionConfig,
@@ -31,6 +36,7 @@ import {
   resetRedactionConfigPreference,
   setRedactionConfigPreference,
   setRedactionPreference,
+  readRetentionPolicy,
 } from "../persistence/preferences.js";
 import { loadRecoverableSession } from "../persistence/session-recovery.js";
 import { onServiceWorkerActivate } from "./service-worker-lifecycle.js";
@@ -156,6 +162,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const data = await readSessionData();
         const redactionEnabled = await readRedactionPreference();
         const redactionConfig = await readRedactionConfig();
+        const history = await readSessionHistory();
+        const retentionPolicy = await readRetentionPolicy();
+        const deletionReceipts = await readDeletionReceiptsSnapshot();
         const hasData =
           data.network.length > 0 ||
           data.navigation.length > 0 ||
@@ -172,6 +181,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           canExport: !data.session?.active && hasData,
           redactionEnabled,
           redactionConfig,
+          history,
+          retentionPolicy,
+          deletionReceipts,
         };
       }
       case MessageType.SET_REDACTION: {
@@ -199,6 +211,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case MessageType.GET_REDACTION_PREVIEW:
         await loadRedactionConfig();
         return { ok: true, preview: buildRedactionPreview() };
+      case MessageType.PREPARE_NEW_CAPTURE:
+        if (await getActiveSession()) return { ok: false, error: "Stop capture first" };
+        await clearSessionData({ archive: true, preserveHistory: true });
+        return { ok: true };
+      case MessageType.SET_RETENTION: {
+        const retentionPolicy = await updateRetentionPolicy(message.policy ?? {});
+        return { ok: true, retentionPolicy };
+      }
+      case MessageType.DELETE_SESSION: {
+        const sessionId = typeof message.sessionId === "string" ? message.sessionId : "";
+        if (!sessionId) return { ok: false, error: "Session ID is required" };
+        const receipt = await deleteSession(sessionId);
+        return { ok: receipt.state === "complete", receipt };
+      }
+      case MessageType.CLEAR_HISTORY: {
+        const receipts = await clearSessionHistory();
+        return { ok: receipts.every((receipt) => receipt.state === "complete"), receipts };
+      }
       case MessageType.ADD_MARKER: {
         const session = await getActiveSession();
         if (!session || session.paused) return { ok: false, error: "Resume capture before adding a marker" };

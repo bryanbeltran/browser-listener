@@ -1,4 +1,5 @@
 import { emptyTruncation } from "./limits.js";
+import { DEFAULT_RETENTION_POLICY } from "./preferences.js";
 import type { CaptureSession, PopupStateSnapshot, PopupCounts } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 
@@ -56,5 +57,8 @@ export function popupStateFromSnapshot(
     },
     canExport: snapshot.canExport,
     redactionEnabled,
+    history: [],
+    retentionPolicy: DEFAULT_RETENTION_POLICY,
+    deletionReceipts: [],
   };
 }

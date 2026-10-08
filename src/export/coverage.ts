@@ -17,6 +17,7 @@ import type {
   SessionData,
 } from "../shared/types.js";
 import { getExtensionVersion } from "../shared/extension-version.js";
+import { buildCapabilityMatrix } from "../capture/capabilities.js";
 
 export const COVERAGE_REPORT_SCHEMA_VERSION = 4 as const;
 
@@ -154,6 +155,7 @@ export function buildCoverageReport(data: SessionData, generatedAt = Date.now())
       tabUrl: data.session?.tabUrl,
       startedAt: data.session?.startedAt,
       stoppedAt: data.session?.stoppedAt,
+      capabilities: data.session?.capabilities ?? buildCapabilityMatrix(),
       targets: (data.session?.targets ?? [{ tabId: data.session?.tabId ?? -1, url: data.session?.tabUrl }]).map((target) => ({
         tabId: target.tabId,
         ...(target.url ? { url: target.url } : {}),

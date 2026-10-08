@@ -121,6 +121,11 @@ export async function attachDebugger(tabId: number): Promise<void> {
     await chrome.debugger.sendCommand({ tabId }, "Network.enable");
     await chrome.debugger.sendCommand({ tabId }, "Runtime.enable");
     await chrome.debugger.sendCommand({ tabId }, "Log.enable");
+    try {
+      await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+    } catch {
+      /* Frame-tree snapshots record unsupported when the Page domain is unavailable. */
+    }
     attachedTabIds.add(tabId);
     try {
       await chrome.debugger.sendCommand({ tabId }, "Performance.enable");

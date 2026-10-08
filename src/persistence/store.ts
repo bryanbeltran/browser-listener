@@ -26,6 +26,8 @@ import {
   REDACTION_CONFIG_KEY,
   applyRedactionConfig,
   loadRedactionConfig,
+  readRetentionPolicy,
+  setRetentionPolicy as persistRetentionPolicy,
 } from "./preferences.js";
 import type {
   BrowserContextSnapshot,
@@ -38,6 +40,10 @@ import type {
   PopupCounts,
   PopupStateSnapshot,
   SessionData,
+  SessionHistoryEntry,
+  DeletionPhase,
+  DeletionReceipt,
+  RetentionPolicy,
   StorageTruncation,
 } from "../shared/types.js";
 import {
@@ -49,11 +55,15 @@ import {
 } from "../shared/types.js";
 import type { PopupStateResponse } from "../shared/messages.js";
 import { normalizeOriginAllowlist } from "../shared/urls.js";
+import { buildCapabilityMatrix } from "../capture/capabilities.js";
 
 const STORAGE_KEY = "browserListenerSessionData";
 const ACTIVE_FLAG = "browserListenerActiveSessionId";
 const EVIDENCE_KEY = "browserListenerEvidence";
+const HISTORY_KEY = "browserListenerSessionHistory";
+const DELETION_RECEIPTS_KEY = "browserListenerDeletionReceipts";
 const POPUP_DEBOUNCE_MS = 1500;
+const MAX_DELETION_RECEIPTS = 20;
 
 interface PersistedSessionMeta {
   session: CaptureSession | null;
@@ -154,6 +164,7 @@ function normalizeSession(session: CaptureSession | null): CaptureSession | null
     options,
     health: normalizeHealth(session),
     policyEpochs,
+    capabilities: session.capabilities ?? buildCapabilityMatrix(),
   };
 }
 
@@ -180,6 +191,168 @@ function normalizeSessionData(data: Partial<SessionData>): SessionData {
   };
 }
 
+function nonnegativeInteger(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function normalizeHistoryEntry(value: unknown): SessionHistoryEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<SessionHistoryEntry>;
+  if (typeof candidate.id !== "string" || !candidate.id) return null;
+  const counts = candidate.counts ?? ({} as SessionHistoryEntry["counts"]);
+  return {
+    schemaVersion: 1,
+    id: candidate.id,
+    ...(typeof candidate.name === "string" && candidate.name ? { name: candidate.name.slice(0, 120) } : {}),
+    startedAt: nonnegativeInteger(candidate.startedAt),
+    ...(typeof candidate.stoppedAt === "number" ? { stoppedAt: candidate.stoppedAt } : {}),
+    archivedAt: nonnegativeInteger(candidate.archivedAt),
+    bytes: nonnegativeInteger(candidate.bytes),
+    counts: {
+      network: nonnegativeInteger(counts.network),
+      navigation: nonnegativeInteger(counts.navigation),
+      console: nonnegativeInteger(counts.console),
+      markers: nonnegativeInteger(counts.markers),
+      requestBodies: nonnegativeInteger(counts.requestBodies),
+      responseBodies: nonnegativeInteger(counts.responseBodies),
+    },
+    partial: candidate.partial === true,
+    redactionEnabled: candidate.redactionEnabled !== false,
+    policyEpochCount: Math.max(1, nonnegativeInteger(candidate.policyEpochCount)),
+  };
+}
+
+async function readHistoryStorage(): Promise<SessionHistoryEntry[]> {
+  const raw = await chrome.storage.local.get(HISTORY_KEY);
+  const values = Array.isArray(raw[HISTORY_KEY]) ? raw[HISTORY_KEY] as unknown[] : [];
+  return values
+    .map(normalizeHistoryEntry)
+    .filter((entry): entry is SessionHistoryEntry => entry != null)
+    .sort((left, right) => right.archivedAt - left.archivedAt || left.id.localeCompare(right.id));
+}
+
+async function writeHistoryStorage(entries: SessionHistoryEntry[]): Promise<void> {
+  await chrome.storage.local.set({
+    [HISTORY_KEY]: entries.map((entry) => entry.redactionEnabled && entry.name
+      ? { ...entry, name: redactSensitiveString(entry.name) }
+      : entry),
+  });
+}
+
+async function readDeletionReceipts(): Promise<DeletionReceipt[]> {
+  const raw = await chrome.storage.local.get(DELETION_RECEIPTS_KEY);
+  const values = Array.isArray(raw[DELETION_RECEIPTS_KEY]) ? raw[DELETION_RECEIPTS_KEY] as unknown[] : [];
+  return values.filter((value): value is DeletionReceipt => Boolean(value && typeof value === "object" && typeof (value as DeletionReceipt).id === "string"));
+}
+
+async function writeDeletionReceipt(receipt: DeletionReceipt): Promise<void> {
+  const receipts = (await readDeletionReceipts()).filter((candidate) => candidate.id !== receipt.id);
+  receipts.unshift(receipt);
+  await chrome.storage.local.set({
+    [DELETION_RECEIPTS_KEY]: receipts.slice(0, MAX_DELETION_RECEIPTS),
+  });
+}
+
+function evidenceByteEstimate(data: SessionData): number {
+  const evidence = {
+    navigation: data.navigation,
+    console: data.console,
+    markers: data.markers ?? [],
+    contextSnapshots: data.contextSnapshots ?? [],
+    performanceSignals: data.performanceSignals ?? [],
+  };
+  return new TextEncoder().encode(JSON.stringify(evidence)).byteLength;
+}
+
+function historyEntryFromData(data: SessionData, archivedAt = Date.now()): SessionHistoryEntry | null {
+  const session = data.session;
+  if (!session) return null;
+  const truncation = session.health.truncation;
+  const partial = Boolean(
+    session.tabClosedDuringCapture ||
+      session.health.partialGaps.length > 0 ||
+      session.health.persistenceErrors.length > 0 ||
+      (session.health.fairBudgetEvictions ?? 0) > 0 ||
+      truncation.network > 0 ||
+      truncation.navigation > 0 ||
+      truncation.console > 0 ||
+      (truncation.markers ?? 0) > 0,
+  );
+  return {
+    schemaVersion: 1,
+    id: session.id,
+    ...(session.name || session.options.sessionName ? { name: (session.name ?? session.options.sessionName)?.slice(0, 120) } : {}),
+    startedAt: session.startedAt,
+    ...(session.stoppedAt == null ? {} : { stoppedAt: session.stoppedAt }),
+    archivedAt,
+    bytes: totalNetworkBytes(data.network) + evidenceByteEstimate(data),
+    counts: {
+      network: data.network.length,
+      navigation: data.navigation.length,
+      console: data.console.length,
+      markers: data.markers?.length ?? 0,
+      requestBodies: data.network.filter((entry) => entry.requestBody != null).length,
+      responseBodies: data.network.filter((entry) => entry.responseBody != null).length,
+    },
+    partial,
+    redactionEnabled: session.options.redactionEnabled !== false,
+    policyEpochCount: session.policyEpochs?.length ?? 1,
+  };
+}
+
+async function deleteEvidenceForSession(sessionId: string): Promise<void> {
+  const raw = await chrome.storage.local.get(EVIDENCE_KEY);
+  const map = (raw[EVIDENCE_KEY] as PersistedEvidenceMap | undefined) ?? {};
+  if (!(sessionId in map)) return;
+  delete map[sessionId];
+  if (Object.keys(map).length) await chrome.storage.local.set({ [EVIDENCE_KEY]: map });
+  else await chrome.storage.local.remove(EVIDENCE_KEY);
+}
+
+async function deleteSessionArtifacts(sessionId: string): Promise<void> {
+  await clearNetworkEntries(sessionId);
+  resetCaptureStats(sessionId);
+  await deleteEvidenceForSession(sessionId);
+}
+
+async function applyRetentionPolicyInternal(currentSessionId?: string): Promise<SessionHistoryEntry[]> {
+  const policy = await readRetentionPolicy();
+  const entries = await readHistoryStorage();
+  const now = Date.now();
+  const eligible = entries.filter((entry) => entry.id !== currentSessionId);
+  const expired = new Set(eligible
+    .filter((entry) => entry.id !== currentSessionId && now - entry.archivedAt > policy.maxAgeMs)
+    .map((entry) => entry.id));
+  const orderedCandidates = [...eligible]
+    .sort((left, right) => left.archivedAt - right.archivedAt || left.id.localeCompare(right.id));
+  const remove = new Set(expired);
+  let keptCount = entries.length - remove.size;
+  for (const entry of orderedCandidates) {
+    if (keptCount <= policy.maxSessions) break;
+    if (remove.has(entry.id)) continue;
+    remove.add(entry.id);
+    keptCount -= 1;
+  }
+  let bytes = entries.reduce((total, entry) => total + entry.bytes, 0);
+  for (const entry of entries) {
+    if (remove.has(entry.id)) bytes = Math.max(0, bytes - entry.bytes);
+  }
+  for (const entry of orderedCandidates) {
+    if (bytes <= policy.maxBytes) break;
+    if (remove.has(entry.id)) continue;
+    remove.add(entry.id);
+    bytes = Math.max(0, bytes - entry.bytes);
+  }
+  for (const id of remove) {
+    try {
+      await deleteSession(id);
+    } catch {
+      /* The deletion receipt and history entry remain retryable on the next run. */
+    }
+  }
+  return readHistoryStorage();
+}
+
 function shouldRedact(session: CaptureSession | null): boolean {
   return session?.options?.redactionEnabled !== false;
 }
@@ -201,13 +374,35 @@ async function readPersistedMeta(): Promise<PersistedSessionMeta> {
     };
   }
 
-  if (isLegacySessionData(persisted) && session?.id && persisted.network.length > 0) {
-    const network = session.options.redactionEnabled === false
-      ? persisted.network
-      : persisted.network.map((entry) => redactDeep(entry));
-    const result = await putNetworkEntries(session.id, network, totalNetworkBytes(network));
-    if (result.truncated > 0 && session) {
-      session = bumpTruncation(session, { network: result.truncated });
+  if (isLegacySessionData(persisted) && session?.id) {
+    const redact = session.options.redactionEnabled !== false;
+    if (persisted.network.length > 0) {
+      const network = redact
+        ? persisted.network.map((entry) => redactDeep(entry))
+        : persisted.network;
+      const result = await putNetworkEntries(session.id, network, totalNetworkBytes(network));
+      if (result.truncated > 0 && session) {
+        session = bumpTruncation(session, { network: result.truncated });
+      }
+    }
+
+    const legacyEvidence = normalizeEvidence(persisted);
+    const hasLegacyEvidence = Boolean(
+      legacyEvidence.navigation.length ||
+        legacyEvidence.console.length ||
+        legacyEvidence.markers.length ||
+        legacyEvidence.contextSnapshots.length ||
+        legacyEvidence.performanceSignals.length,
+    );
+    if (hasLegacyEvidence) {
+      const existingEvidence = await readEvidence(session.id);
+      await writeEvidence(session.id, {
+        navigation: existingEvidence.navigation.length ? existingEvidence.navigation : legacyEvidence.navigation,
+        console: existingEvidence.console.length ? existingEvidence.console : legacyEvidence.console,
+        markers: existingEvidence.markers.length ? existingEvidence.markers : legacyEvidence.markers,
+        contextSnapshots: existingEvidence.contextSnapshots.length ? existingEvidence.contextSnapshots : legacyEvidence.contextSnapshots,
+        performanceSignals: existingEvidence.performanceSignals.length ? existingEvidence.performanceSignals : legacyEvidence.performanceSignals,
+      }, redact);
     }
     await writePersistedMeta({ session });
   }
@@ -418,6 +613,130 @@ export async function readSessionData(): Promise<SessionData> {
   });
 }
 
+export async function readSessionHistory(): Promise<SessionHistoryEntry[]> {
+  return readHistoryStorage();
+}
+
+export async function readDeletionReceiptsSnapshot(): Promise<DeletionReceipt[]> {
+  return readDeletionReceipts();
+}
+
+export async function archiveCurrentSession(): Promise<SessionHistoryEntry | null> {
+  const data = await readSessionData();
+  if (!data.session || data.session.active) return null;
+  const entry = historyEntryFromData(data);
+  if (!entry) return null;
+  const existing = await readHistoryStorage();
+  await writeHistoryStorage([entry, ...existing.filter((candidate) => candidate.id !== entry.id)]);
+  await applyRetentionPolicyInternal(entry.id);
+  return entry;
+}
+
+export async function updateRetentionPolicy(policy: Partial<RetentionPolicy>): Promise<RetentionPolicy> {
+  const normalized = await persistRetentionPolicy(policy);
+  const current = await readSessionMeta();
+  await applyRetentionPolicyInternal(current?.id);
+  return normalized;
+}
+
+export async function deleteSession(sessionId: string): Promise<DeletionReceipt> {
+  const requestedAt = Date.now();
+  const phases: DeletionPhase[] = ["network", "evidence", "metadata", "history", "receipt"];
+  const existing = (await readDeletionReceipts()).find((receipt) => receipt.sessionId === sessionId);
+  if (existing?.state === "complete") return existing;
+  const completed = new Set(existing?.completedPhases ?? []);
+  const errors: string[] = [];
+  const current = await readSessionMeta();
+  if (current?.id === sessionId && current.active) {
+    const receipt: DeletionReceipt = {
+      schemaVersion: 1,
+      id: existing?.id ?? crypto.randomUUID(),
+      sessionId,
+      requestedAt: existing?.requestedAt ?? requestedAt,
+      state: "partial",
+      completedPhases: [...completed],
+      remainingPhases: phases.filter((phase) => !completed.has(phase) && phase !== "receipt"),
+      errors: ["active session must be stopped before deletion"],
+    };
+    await writeDeletionReceipt(receipt);
+    return receipt;
+  }
+  const receiptId = existing?.id ?? crypto.randomUUID();
+  const mark = (phase: DeletionPhase): void => {
+    completed.add(phase);
+  };
+  if (!completed.has("network")) {
+    try {
+      await clearNetworkEntries(sessionId);
+      resetCaptureStats(sessionId);
+      mark("network");
+    } catch (error) {
+      errors.push(`network: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (!completed.has("evidence")) {
+    try {
+      await deleteEvidenceForSession(sessionId);
+      mark("evidence");
+    } catch (error) {
+      errors.push(`evidence: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (!completed.has("metadata")) {
+    try {
+      if (current?.id === sessionId) {
+        await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);
+        cancelPopupDebounce();
+      }
+      mark("metadata");
+    } catch (error) {
+      errors.push(`metadata: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const artifactsDeleted = ["network", "evidence", "metadata"]
+    .every((phase) => completed.has(phase as DeletionPhase));
+  if (!completed.has("history") && artifactsDeleted) {
+    try {
+      const entries = await readHistoryStorage();
+      await writeHistoryStorage(entries.filter((entry) => entry.id !== sessionId));
+      mark("history");
+    } catch (error) {
+      errors.push(`history: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const remaining = phases.filter((phase) => phase !== "receipt" && !completed.has(phase));
+  const receipt: DeletionReceipt = {
+    schemaVersion: 1,
+    id: receiptId,
+    sessionId,
+    requestedAt: existing?.requestedAt ?? requestedAt,
+    ...(remaining.length ? {} : { completedAt: Date.now() }),
+    state: remaining.length || errors.length ? "partial" : "complete",
+    completedPhases: [...completed],
+    remainingPhases: remaining,
+    errors,
+  };
+  mark("receipt");
+  const finalReceipt = { ...receipt, completedPhases: [...completed] };
+  await writeDeletionReceipt(finalReceipt);
+  return finalReceipt;
+}
+
+export async function clearSessionHistory(): Promise<DeletionReceipt[]> {
+  const entries = await readHistoryStorage();
+  const receipts: DeletionReceipt[] = [];
+  for (const entry of entries) receipts.push(await deleteSession(entry.id));
+  return receipts;
+}
+
+/** Retry incomplete deletion phases after a service-worker restart. */
+export async function resumePendingDeletions(): Promise<void> {
+  const receipts = await readDeletionReceipts();
+  for (const receipt of receipts.filter((candidate) => candidate.state === "partial")) {
+    await deleteSession(receipt.sessionId);
+  }
+}
+
 export async function writeSessionData(data: SessionData): Promise<SessionData> {
   const normalized = normalizeSessionData(data);
   let session = normalized.session;
@@ -545,6 +864,17 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
   const redactionEnabled =
     storedRedaction == null ? DEFAULT_REDACTION_ENABLED : storedRedaction !== false;
   const redactionConfig = applyRedactionConfig(raw[REDACTION_CONFIG_KEY]);
+  const [history, retentionPolicy, deletionReceipts] = await Promise.all([
+    readHistoryStorage(),
+    readRetentionPolicy(),
+    readDeletionReceipts(),
+  ]);
+  const decorate = (state: PopupStateResponse): PopupStateResponse => ({
+    ...state,
+    history,
+    retentionPolicy,
+    deletionReceipts,
+  });
 
   let session = normalizeSession(
     isLegacySessionData(persisted) ? persisted.session : (persisted?.session ?? null),
@@ -553,25 +883,25 @@ export async function readPopupStateForUi(): Promise<PopupStateResponse> {
     session = { ...session, active: Boolean(activeId && session.id === activeId) };
   }
 
-  if (!session) return { ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig };
+  if (!session) return decorate({ ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig });
 
   const snapshotActive = snapshot.session?.active ?? false;
   const snapshotId = snapshot.session?.id;
   if (session.active !== snapshotActive || session.id !== snapshotId) {
-    return {
+    return decorate({
       ...popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled),
       redactionConfig,
-    };
+    });
   }
 
   if (popupHealthStale(snapshot, session)) {
-    return {
+    return decorate({
       ...popupStateFromSnapshot(buildPopupStateSnapshot(session, snapshot.counts), redactionEnabled),
       redactionConfig,
-    };
+    });
   }
 
-  return { ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig };
+  return decorate({ ...popupStateFromSnapshot(snapshot, redactionEnabled), redactionConfig });
 }
 
 export async function getActiveSessionId(): Promise<string | null> {
@@ -820,16 +1150,20 @@ export async function recordHealthGap(reason: string): Promise<void> {
   });
 }
 
-export async function clearSessionData(): Promise<void> {
+export async function clearSessionData(opts: { archive?: boolean; preserveHistory?: boolean } = {}): Promise<void> {
   const meta = await readPersistedMeta();
   if (meta.session?.id) {
-    await clearNetworkEntries(meta.session.id);
-    resetCaptureStats(meta.session.id);
+    if (opts.archive && !meta.session.active) await archiveCurrentSession();
+    if (!opts.preserveHistory) {
+      await deleteSessionArtifacts(meta.session.id);
+      const entries = await readHistoryStorage();
+      await writeHistoryStorage(entries.filter((entry) => entry.id !== meta.session?.id));
+    }
   } else {
     resetCaptureStats();
   }
   await flushPopupSnapshot();
-  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, EVIDENCE_KEY, POPUP_STATE_KEY]);
+  await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_FLAG, POPUP_STATE_KEY]);
 }
 
 /** Test helper — wipe IndexedDB network store between tests. */

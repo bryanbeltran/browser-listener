@@ -41,6 +41,8 @@ export interface CaptureOptions {
   targetTabIds?: number[];
   /** Fairness budgets applied in addition to the global storage limits. */
   budgets?: CaptureBudgets;
+  /** Optional local label; it never changes event identity or capture scope. */
+  sessionName?: string;
 }
 
 export const DEFAULT_CAPTURE_OPTIONS: CaptureOptions = {
@@ -82,6 +84,30 @@ export interface CapturePolicyEpoch {
   captureConsole: boolean;
   allowedOrigins: string[];
   budgets: CaptureBudgets;
+}
+
+export interface CapabilityStatus {
+  supported: boolean;
+  reason?: string;
+}
+
+/** Adapter-owned browser capability declaration; unsupported features remain visible in exports. */
+export interface CapabilityMatrix {
+  schemaVersion: 1;
+  adapter: "chromium-mv3";
+  browserFamily: "chromium";
+  versions: {
+    extension: string;
+    manifest: number;
+    userAgent?: string;
+  };
+  debuggerDomains: Record<string, CapabilityStatus>;
+  bodyRetrieval: CapabilityStatus;
+  workerTargets: CapabilityStatus;
+  screenshots: CapabilityStatus;
+  downloads: CapabilityStatus;
+  storage: CapabilityStatus;
+  lifecycleRecovery: CapabilityStatus;
 }
 
 export function policyEpochFromOptions(
@@ -210,6 +236,7 @@ export interface CaptureSession {
   stoppedAt?: number;
   tabId: number;
   tabUrl?: string;
+  name?: string;
   /** Extension build active when the session was created. */
   extensionVersion?: string;
   options: CaptureOptions;
@@ -220,6 +247,7 @@ export interface CaptureSession {
   targets?: CaptureTarget[];
   /** Immutable policy snapshots; legacy sessions are normalized to one epoch on read. */
   policyEpochs?: CapturePolicyEpoch[];
+  capabilities?: CapabilityMatrix;
 }
 
 /** Slim session fields for popup UI. */
@@ -320,6 +348,43 @@ export type BodyEncoding = "utf-8" | "base64" | "unknown";
 
 export type CoverageStateCounts = Record<CoverageState, number>;
 
+export interface FrameTreeNode {
+  id: string;
+  parentId?: string;
+  url?: string;
+  securityOrigin?: string;
+  name?: string;
+  childCount: number;
+}
+
+export interface FrameTreeSnapshot {
+  browserSupport: "cdp-page-v1" | "unsupported";
+  rootId?: string;
+  frames: FrameTreeNode[];
+  truncated?: boolean;
+}
+
+export interface NavigationTimingSummary {
+  durationMs?: number;
+  responseStartMs?: number;
+  domContentLoadedMs?: number;
+  loadEventMs?: number;
+  transferSize?: number;
+}
+
+export interface ResourceTimingSummary {
+  count: number;
+  totalDurationMs: number;
+  slowestDurationMs?: number;
+  totalTransferSize?: number;
+}
+
+export interface LongTaskSummary {
+  count: number;
+  totalDurationMs: number;
+  longestDurationMs?: number;
+}
+
 export interface CoverageStateSummary {
   network: CoverageStateCounts;
   navigation: CoverageStateCounts;
@@ -345,6 +410,11 @@ export interface BrowserContextSnapshot {
   online?: boolean;
   viewport?: { width: number; height: number };
   deviceScaleFactor?: number;
+  frameTree?: FrameTreeSnapshot;
+  navigationTiming?: NavigationTimingSummary;
+  resourceTiming?: ResourceTimingSummary;
+  longTaskSummary?: LongTaskSummary;
+  capabilities?: CapabilityMatrix;
   source: "Runtime.evaluate" | "tabs.get";
 }
 
@@ -386,6 +456,7 @@ export interface CoverageReport {
     tabUrl?: string;
     startedAt?: number;
     stoppedAt?: number;
+    capabilities?: CapabilityMatrix;
     targets?: Array<{
       tabId: number;
       url?: string;
@@ -519,6 +590,44 @@ export interface SessionSummary {
     responseBodies: number;
   };
   health: SessionHealth;
+}
+
+export interface RetentionPolicy {
+  schemaVersion: 1;
+  /** Completed local sessions older than this are eligible for deletion. */
+  maxAgeMs: number;
+  /** Maximum number of completed session records retained locally. */
+  maxSessions: number;
+  /** Maximum estimated bytes across retained completed sessions. */
+  maxBytes: number;
+}
+
+export interface SessionHistoryEntry {
+  schemaVersion: 1;
+  id: string;
+  name?: string;
+  startedAt: number;
+  stoppedAt?: number;
+  archivedAt: number;
+  bytes: number;
+  counts: SessionSummary["counts"];
+  partial: boolean;
+  redactionEnabled: boolean;
+  policyEpochCount: number;
+}
+
+export type DeletionPhase = "network" | "evidence" | "metadata" | "history" | "receipt";
+
+export interface DeletionReceipt {
+  schemaVersion: 1;
+  id: string;
+  sessionId: string;
+  requestedAt: number;
+  completedAt?: number;
+  state: "complete" | "partial";
+  completedPhases: DeletionPhase[];
+  remainingPhases: DeletionPhase[];
+  errors: string[];
 }
 
 export interface SessionData {

@@ -209,7 +209,21 @@ if(contextSection){
   const snapshots=DATA.contextSnapshots||[], performance=DATA.performanceSignals||[];
   let html='<h2>Browser context and performance</h2><p class="muted">Metadata and aggregate signals only; no DOM, form, clipboard, microphone, or camera content is captured.</p>';
   html+='<h3>Context snapshots</h3>';
-  html+=snapshots.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>URL</th><th>Viewport</th><th>Visibility</th><th>Focus</th><th>Online</th></tr></thead><tbody>'+snapshots.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+safeLink(entry.url)+'</td><td>'+esc(entry.viewport?entry.viewport.width+' × '+entry.viewport.height:'—')+'</td><td>'+esc(entry.visibilityState||'—')+'</td><td>'+esc(entry.focused==null?'—':entry.focused)+'</td><td>'+esc(entry.online==null?'—':entry.online)+'</td></tr>').join('')+'</tbody></table>':'<p class="muted">No context snapshot was captured.</p>';
+  html+=snapshots.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>URL</th><th>Viewport</th><th>Frames</th><th>Navigation timing</th><th>Resources</th><th>Long tasks</th><th>Visibility</th><th>Focus</th><th>Online</th></tr></thead><tbody>'+snapshots.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+safeLink(entry.url)+'</td><td>'+esc(entry.viewport?entry.viewport.width+' × '+entry.viewport.height:'—')+'</td><td>'+esc(entry.frameTree?entry.frameTree.frames.length+(entry.frameTree.truncated?'+':''):'—')+'</td><td>'+esc(entry.navigationTiming?JSON.stringify(entry.navigationTiming):'—')+'</td><td>'+esc(entry.resourceTiming?JSON.stringify(entry.resourceTiming):'—')+'</td><td>'+esc(entry.longTaskSummary?JSON.stringify(entry.longTaskSummary):'—')+'</td><td>'+esc(entry.visibilityState||'—')+'</td><td>'+esc(entry.focused==null?'—':entry.focused)+'</td><td>'+esc(entry.online==null?'—':entry.online)+'</td></tr>').join('')+'</tbody></table>':'<p class="muted">No context snapshot was captured.</p>';
+  const capabilities=c.source?.capabilities;
+  if(capabilities){
+    const capabilityRows=[];
+    for(const [name,status] of Object.entries({
+      ...capabilities.debuggerDomains,
+      bodyRetrieval:capabilities.bodyRetrieval,
+      workerTargets:capabilities.workerTargets,
+      screenshots:capabilities.screenshots,
+      downloads:capabilities.downloads,
+      storage:capabilities.storage,
+      lifecycleRecovery:capabilities.lifecycleRecovery,
+    })) capabilityRows.push([esc(name),esc(status.supported?'supported':'unsupported'),esc(status.reason||'')]);
+    html+='<h3>Adapter capabilities</h3><p class="muted">Unsupported capabilities are reported explicitly and are not inferred from missing evidence.</p>'+table(['Capability','Status','Reason'],capabilityRows);
+  }
   html+='<h3>Performance samples</h3>';
   html+=performance.length?'<table><thead><tr><th>Time</th><th>Tab</th><th>Support</th><th>Metrics</th></tr></thead><tbody>'+performance.map(entry=>'<tr><td>'+esc(formatDate(entry.timestamp))+'</td><td>'+esc(entry.tabId)+'</td><td>'+esc(entry.browserSupport)+'</td><td><pre>'+esc(JSON.stringify(entry.metrics))+'</pre></td></tr>').join('')+'</tbody></table>':'<p class="muted">No performance sample was captured.</p>';
   contextSection.innerHTML=html;

@@ -8,6 +8,10 @@ export const MessageType = {
   SET_REDACTION_CONFIG: "SET_REDACTION_CONFIG",
   RESET_REDACTION_CONFIG: "RESET_REDACTION_CONFIG",
   GET_REDACTION_PREVIEW: "GET_REDACTION_PREVIEW",
+  PREPARE_NEW_CAPTURE: "PREPARE_NEW_CAPTURE",
+  SET_RETENTION: "SET_RETENTION",
+  DELETE_SESSION: "DELETE_SESSION",
+  CLEAR_HISTORY: "CLEAR_HISTORY",
   ADD_MARKER: "ADD_MARKER",
   PAUSE_CAPTURE: "PAUSE_CAPTURE",
   RESUME_CAPTURE: "RESUME_CAPTURE",
@@ -21,6 +25,9 @@ export interface PopupStateResponse {
   canExport: boolean;
   redactionEnabled: boolean;
   redactionConfig?: import("./types.js").RedactionConfig;
+  history: import("./types.js").SessionHistoryEntry[];
+  retentionPolicy: import("./types.js").RetentionPolicy;
+  deletionReceipts: import("./types.js").DeletionReceipt[];
 }
 
 export interface ExportEntityCounts {

@@ -1,6 +1,6 @@
 import { getActiveSession } from "../capture/session-manager.js";
 import { markServiceWorkerRestart } from "../persistence/session-recovery.js";
-import { syncPopupStateSnapshot } from "../persistence/store.js";
+import { resumePendingDeletions, syncPopupStateSnapshot } from "../persistence/store.js";
 
 const SW_BOOT_KEY = "swBooted";
 
@@ -15,5 +15,6 @@ export async function onServiceWorkerActivate(): Promise<void> {
     await markServiceWorkerRestart();
   }
   await chrome.storage.session.set({ [SW_BOOT_KEY]: true });
+  await resumePendingDeletions();
   await syncPopupStateSnapshot();
 }
